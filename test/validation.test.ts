@@ -94,6 +94,30 @@ function setCalibration(task: Record<string, any>, status: "draft" | "released" 
   task.calibration.evidence_digest = evidenceDigest;
 }
 
+async function addValidSuite(fixture: { root: string; task: Record<string, unknown> }): Promise<Record<string, any>> {
+  await mkdir(join(fixture.root, "suites/demo-breadth"), { recursive: true });
+  const suite = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/suite.example.json"), "utf8"));
+  suite.id = "demo-breadth";
+  suite.status = "draft";
+  suite.tasks[0].id = "demo";
+  suite.tasks[0].spec_path = "tasks/demo/1.0.0/task.json";
+  suite.tasks[0].spec_digest = manifestDigest(fixture.task);
+  await writeFile(join(fixture.root, "suites/demo-breadth/1.0.0.json"), JSON.stringify(suite));
+  return suite;
+}
+
+async function addValidExperiment(fixture: { root: string; task: Record<string, unknown> }): Promise<{ experiment: Record<string, any>; file: string }> {
+  const suite = await addValidSuite(fixture);
+  await mkdir(join(fixture.root, "experiments/demo"), { recursive: true });
+  const experiment = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/experiment.example.json"), "utf8"));
+  experiment.suite.id = "demo-breadth";
+  experiment.suite.spec_path = "suites/demo-breadth/1.0.0.json";
+  experiment.suite.spec_digest = manifestDigest(suite);
+  const file = join(fixture.root, "experiments/demo/1.0.0.json");
+  await writeFile(file, JSON.stringify(experiment));
+  return { experiment, file };
+}
+
 test("repository semantics reject prompt digest, orphan artifacts, unknown evaluator tasks, and duplicate identities", async () => {
   const fixture = await semanticFixture();
   fixture.task.prompt = { ...(fixture.task.prompt as Record<string, unknown>), digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }; await writeFile(fixture.taskFile, JSON.stringify(fixture.task));
@@ -167,6 +191,15 @@ test("draft suites may omit task spec digests", async () => {
   const fixture = await semanticFixture(); await mkdir(join(fixture.root, "suites/demo"), { recursive: true }); const suite = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/suite.example.json"), "utf8")); suite.status = "draft"; suite.tasks[0].id = "demo"; suite.tasks[0].spec_path = "tasks/demo/1.0.0/task.json"; delete suite.tasks[0].spec_digest; await writeFile(join(fixture.root, "suites/demo/1.0.0.json"), JSON.stringify(suite)); await validateRepository(fixture.root);
 });
 
+test("suite task references are unique by task ID and version", async () => {
+  const fixture = await semanticFixture();
+  const suite = await addValidSuite(fixture);
+  await validateRepository(fixture.root);
+  suite.tasks.push({ ...suite.tasks[0] });
+  await writeFile(join(fixture.root, "suites/demo-breadth/1.0.0.json"), JSON.stringify(suite));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.message.includes("duplicate suite task reference demo@1.0.0"));
+});
+
 test("task scoring check IDs are unique without requiring an evaluation artifact", async () => {
   const fixture = await semanticFixture(); const checks = (fixture.task.scoring as Record<string, any>).checks; checks.push(checks[0]); await writeFile(fixture.taskFile, JSON.stringify(fixture.task)); await assert.rejects(validateRepository(fixture.root), /task scoring check IDs must be unique/);
 });
@@ -176,6 +209,35 @@ test("experiment suite references require the loaded suite path and digest", asy
   const suite = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/suite.example.json"), "utf8")); suite.status = "draft"; suite.tasks[0].id = "demo"; suite.tasks[0].spec_path = "tasks/demo/1.0.0/task.json"; suite.tasks[0].spec_digest = manifestDigest(fixture.task); await writeFile(join(fixture.root, "suites/demo-breadth/1.0.0.json"), JSON.stringify(suite));
   const experiment = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/experiment.example.json"), "utf8")); experiment.suite.spec_path = "suites/wrong/1.0.0.json"; experiment.suite.spec_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"; await writeFile(join(fixture.root, "experiments/demo/1.0.0.json"), JSON.stringify(experiment));
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.message.includes("suite spec_path does not resolve") && error.message.includes("suite digest mismatch"));
+});
+
+test("experiment comparisons accept declared unique configuration IDs", async () => {
+  const fixture = await semanticFixture();
+  await addValidExperiment(fixture);
+  await validateRepository(fixture.root);
+});
+
+test("experiment reporting rejects ambiguous or undeclared configuration IDs", async () => {
+  const fixture = await semanticFixture();
+  const { experiment, file } = await addValidExperiment(fixture);
+
+  experiment.configurations[1].id = experiment.configurations[0].id;
+  await writeFile(file, JSON.stringify(experiment));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.message.includes("duplicate experiment configuration ID codex-medium"));
+
+  experiment.configurations[1].id = "codex-high";
+  experiment.reporting.comparisons[0].baseline_configuration_id = "missing-baseline";
+  await writeFile(file, JSON.stringify(experiment));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.message.includes("undeclared baseline configuration missing-baseline"));
+
+  experiment.reporting.comparisons[0].baseline_configuration_id = "codex-medium";
+  experiment.reporting.comparisons[0].candidate_configuration_ids = ["missing-candidate"];
+  await writeFile(file, JSON.stringify(experiment));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.message.includes("undeclared candidate configuration missing-candidate"));
+
+  experiment.reporting.comparisons[0].candidate_configuration_ids = ["codex-high", "codex-high"];
+  await writeFile(file, JSON.stringify(experiment));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "schema/uniqueItems"));
 });
 
 test("canonical results request.json artifacts are discovered and schema-validated", async () => {

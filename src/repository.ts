@@ -163,8 +163,12 @@ export async function validateRepository(rootInput: string): Promise<void> {
   for (const suite of repositoryManifests.filter((item) => item.kind === "suite")) {
     suiteByIdentity.set(`${asString(suite.value.id)}@${asString(suite.value.version)}`, suite);
     const suiteStatus = asString(suite.value.status);
+    const taskReferences = new Set<string>();
     for (const item of suite.value.tasks as unknown[]) {
       const task = asObject(item), target = taskByIdentity.get(`${asString(task.id)}@${asString(task.version)}`);
+      const taskReference = `${asString(task.id)}@${asString(task.version)}`;
+      if (taskReferences.has(taskReference)) diagnostics.push({ file: suite.file, code: "semantic/duplicate-task-reference", message: `duplicate suite task reference ${taskReference}` });
+      else taskReferences.add(taskReference);
       if (!target) diagnostics.push({ file: suite.file, code: "semantic/task-reference", message: `missing task ${asString(task.id)}@${asString(task.version)}` });
       else {
         try { const path = asString(task.spec_path); if (!safeRelativePath(path) || resolve(root, path) !== resolve(target.file)) diagnostics.push({ file: suite.file, code: "semantic/task-path", message: `task spec_path does not resolve to ${asString(task.id)}@${asString(task.version)}` }); }
@@ -175,6 +179,20 @@ export async function validateRepository(rootInput: string): Promise<void> {
     }
   }
   for (const experiment of repositoryManifests.filter((item) => item.kind === "experiment")) {
+    const configurationIds = (experiment.value.configurations as unknown[]).map((configuration) => asString(asObject(configuration).id));
+    const declaredConfigurations = new Set<string>();
+    for (const configurationId of configurationIds) {
+      if (declaredConfigurations.has(configurationId)) diagnostics.push({ file: experiment.file, code: "semantic/duplicate-configuration", message: `duplicate experiment configuration ID ${configurationId}` });
+      else declaredConfigurations.add(configurationId);
+    }
+    for (const value of asObject(experiment.value.reporting).comparisons as unknown[]) {
+      const comparison = asObject(value), comparisonId = asString(comparison.id), baseline = asString(comparison.baseline_configuration_id);
+      if (!declaredConfigurations.has(baseline)) diagnostics.push({ file: experiment.file, code: "semantic/comparison-configuration", message: `comparison ${comparisonId} references undeclared baseline configuration ${baseline}` });
+      for (const candidate of comparison.candidate_configuration_ids as unknown[]) {
+        const candidateId = asString(candidate);
+        if (!declaredConfigurations.has(candidateId)) diagnostics.push({ file: experiment.file, code: "semantic/comparison-configuration", message: `comparison ${comparisonId} references undeclared candidate configuration ${candidateId}` });
+      }
+    }
     const reference = asObject(experiment.value.suite), target = suiteByIdentity.get(`${asString(reference.id)}@${asString(reference.version)}`);
     if (!target) diagnostics.push({ file: experiment.file, code: "semantic/suite-reference", message: `missing suite ${asString(reference.id)}@${asString(reference.version)}` });
     else {
