@@ -22,6 +22,7 @@ export function kindFromPath(file: string): string | undefined {
   const parts = file.replace(/^\.\//, "").split(/[\\/]/);
   if (parts[0] === "suites") return "suite";
   if (parts[0] === "experiments") return "experiment";
+  if (parts[0] === "results" && name === "request.json") return "run-request";
   if (name === "task.yaml" || name === "task.yml" || name === "task.json") return "task";
   if (name === "evaluator.json") return "evaluation";
   if (name === "run-request.json") return "run-request";

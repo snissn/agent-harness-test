@@ -16,6 +16,7 @@ test("all seven checked-in examples are discoverable and schema-validated", asyn
   for (const kind of expected) assert.equal(kindFromPath(join("spec/examples", `${kind}.example.json`)), kind);
   assert.equal(kindFromPath("suites/smoke/1.0.0.yaml"), "suite");
   assert.equal(kindFromPath("experiments/smoke/1.0.0.yaml"), "experiment");
+  assert.equal(kindFromPath("results/campaigns/demo/runs/01J00000000000000000000000/request.json"), "run-request");
   assert.equal(kindFromPath("tasks/demo/1.0.0/state/suites/data.json"), undefined);
   await validateRepository(root);
 });
@@ -136,4 +137,9 @@ test("experiment suite references require the loaded suite path and digest", asy
   const suite = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/suite.example.json"), "utf8")); suite.status = "draft"; suite.tasks[0].id = "demo"; suite.tasks[0].spec_path = "tasks/demo/1.0.0/task.json"; suite.tasks[0].spec_digest = manifestDigest(fixture.task); await writeFile(join(fixture.root, "suites/demo-breadth/1.0.0.json"), JSON.stringify(suite));
   const experiment = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/experiment.example.json"), "utf8")); experiment.suite.spec_path = "suites/wrong/1.0.0.json"; experiment.suite.spec_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"; await writeFile(join(fixture.root, "experiments/demo/1.0.0.json"), JSON.stringify(experiment));
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.message.includes("suite spec_path does not resolve") && error.message.includes("suite digest mismatch"));
+});
+
+test("canonical results request.json artifacts are discovered and schema-validated", async () => {
+  const fixture = await mkdtemp(join(tmpdir(), "aht-repo-")); await cp(join(root, "spec/schemas"), join(fixture, "spec/schemas"), { recursive: true }); await mkdir(join(fixture, "spec/examples"), { recursive: true }); const directory = join(fixture, "results/campaigns/demo/runs/01J00000000000000000000000"); await mkdir(directory, { recursive: true }); await writeFile(join(directory, "request.json"), '{"schema_version":"0.2.0"}');
+  await assert.rejects(validateRepository(fixture), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.file.endsWith("request.json") && item.code === "schema/required"));
 });
