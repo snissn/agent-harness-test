@@ -82,6 +82,19 @@ function identity(manifest: Manifest): string | undefined {
   if (["run-request", "run-result"].includes(manifest.kind)) return asString(manifest.value.run_id);
   return undefined;
 }
+function declaredManifestPaths(manifest: Manifest): string[] | undefined {
+  const id = typeof manifest.value.id === "string" ? asString(manifest.value.id) : undefined;
+  const version = typeof manifest.value.version === "string" ? asString(manifest.value.version) : undefined;
+  if (manifest.kind === "task") return ["json", "yaml", "yml"].map((extension) => `tasks/${id}/${version}/task.${extension}`);
+  if (manifest.kind === "suite") return ["json", "yaml", "yml"].map((extension) => `suites/${id}/${version}.${extension}`);
+  if (manifest.kind === "experiment") return ["json", "yaml", "yml"].map((extension) => `experiments/${id}/${version}.${extension}`);
+  if (manifest.kind === "campaign") return [`results/${asString(asObject(manifest.value.experiment).id)}/${asString(manifest.value.campaign_id)}/campaign.json`];
+  if (manifest.kind === "run-request" || manifest.kind === "run-result") {
+    const root = `results/${asString(asObject(manifest.value.experiment).id)}/${asString(manifest.value.campaign_id)}/runs/${asString(manifest.value.run_id)}`;
+    return [`${root}/${manifest.kind === "run-request" ? "request.json" : "run.json"}`];
+  }
+  return undefined;
+}
 
 export async function validateRepository(rootInput: string): Promise<void> {
   const root = await realpath(rootInput);
@@ -107,6 +120,11 @@ export async function validateRepository(rootInput: string): Promise<void> {
     catch (error) { diagnostics.push(...(error instanceof ValidationError ? error.diagnostics : [{ file, code: "internal", message: error instanceof Error ? error.message : String(error) }])); }
   }
   const repositoryManifests = manifests.filter((manifest) => !insideExamples(manifest.file));
+  for (const manifest of repositoryManifests) {
+    const declaredPaths = declaredManifestPaths(manifest);
+    const manifestPath = relative(root, manifest.file).split(sep).join("/");
+    if (declaredPaths && !declaredPaths.includes(manifestPath)) diagnostics.push({ file: manifest.file, code: `semantic/${manifest.kind}-identity`, message: `${manifest.kind} manifest path does not match its declared identity` });
+  }
   const byKindIdentity = new Map<string, Manifest>();
   for (const manifest of repositoryManifests) {
     try {
@@ -121,8 +139,6 @@ export async function validateRepository(rootInput: string): Promise<void> {
   for (const manifest of repositoryManifests.filter((item) => item.kind === "task")) {
     const id = asString(manifest.value.id), version = asString(manifest.value.version), status = asString(manifest.value.status);
     const taskRoot = `tasks/${id}/${version}`;
-    const manifestPath = relative(root, manifest.file).split(sep).join("/");
-    if (![`${taskRoot}/task.json`, `${taskRoot}/task.yaml`, `${taskRoot}/task.yml`].includes(manifestPath)) diagnostics.push({ file: manifest.file, code: "semantic/task-identity", message: `task manifest path does not match declared identity ${id}@${version}` });
     taskByIdentity.set(`${id}@${version}`, manifest);
     try {
       const prompt = asObject(manifest.value.prompt), state = asObject(manifest.value.problem_state), source = asObject(state.source), evaluator = asObject(manifest.value.evaluator);

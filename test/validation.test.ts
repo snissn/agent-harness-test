@@ -116,6 +116,7 @@ async function addValidExperiment(fixture: { root: string; task: Record<string, 
   const suite = await addValidSuite(fixture);
   await mkdir(join(fixture.root, "experiments/demo"), { recursive: true });
   const experiment = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/experiment.example.json"), "utf8"));
+  experiment.id = "demo";
   experiment.suite.id = "demo-breadth";
   experiment.suite.spec_path = "suites/demo-breadth/1.0.0.json";
   experiment.suite.spec_digest = manifestDigest(suite);
@@ -205,11 +206,11 @@ test("task artifact trees are digest inputs, not framework manifest discovery ro
 
 test("draft task manifest path must match its declared ID and version", async () => {
   const fixture = await semanticFixture("foo"); fixture.task.id = "bar"; fixture.task.status = "draft"; await writeFile(fixture.taskFile, JSON.stringify(fixture.task));
-  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/task-identity" && item.message.includes("bar@1.0.0")) && !error.diagnostics.some((item) => item.code === "semantic/task-artifact"));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/task-identity") && !error.diagnostics.some((item) => item.code === "semantic/task-artifact"));
 });
 
 test("draft suites may omit task spec digests", async () => {
-  const fixture = await semanticFixture(); await mkdir(join(fixture.root, "suites/demo"), { recursive: true }); const suite = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/suite.example.json"), "utf8")); suite.status = "draft"; suite.tasks[0].id = "demo"; suite.tasks[0].spec_path = "tasks/demo/1.0.0/task.json"; delete suite.tasks[0].spec_digest; await writeFile(join(fixture.root, "suites/demo/1.0.0.json"), JSON.stringify(suite)); await validateRepository(fixture.root);
+  const fixture = await semanticFixture(); await mkdir(join(fixture.root, "suites/demo"), { recursive: true }); const suite = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/suite.example.json"), "utf8")); suite.id = "demo"; suite.status = "draft"; suite.tasks[0].id = "demo"; suite.tasks[0].spec_path = "tasks/demo/1.0.0/task.json"; delete suite.tasks[0].spec_digest; await writeFile(join(fixture.root, "suites/demo/1.0.0.json"), JSON.stringify(suite)); await validateRepository(fixture.root);
 });
 
 test("suite task references are unique by task ID and version", async () => {
@@ -219,6 +220,12 @@ test("suite task references are unique by task ID and version", async () => {
   suite.tasks.push({ ...suite.tasks[0] });
   await writeFile(join(fixture.root, "suites/demo-breadth/1.0.0.json"), JSON.stringify(suite));
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.message.includes("duplicate suite task reference demo@1.0.0"));
+});
+
+test("suite manifest path must match its declared ID and version", async () => {
+  const fixture = await semanticFixture(); const suite = await addValidSuite(fixture); const file = join(fixture.root, "suites/demo-breadth/1.0.0.json");
+  suite.id = "other-suite"; await writeFile(file, JSON.stringify(suite)); await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/suite-identity"));
+  suite.id = "demo-breadth"; suite.version = "2.0.0"; await writeFile(file, JSON.stringify(suite)); await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/suite-identity"));
 });
 
 test("released and retired suites accept only their immutable task lifecycles", async () => {
@@ -252,6 +259,12 @@ test("experiment comparisons accept declared unique configuration IDs", async ()
   const fixture = await semanticFixture();
   await addValidExperiment(fixture);
   await validateRepository(fixture.root);
+});
+
+test("experiment manifest path must match its declared ID and version", async () => {
+  const fixture = await semanticFixture(); const { experiment, file } = await addValidExperiment(fixture);
+  experiment.id = "other-experiment"; await writeFile(file, JSON.stringify(experiment)); await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/experiment-identity"));
+  experiment.id = "demo"; experiment.version = "2.0.0"; await writeFile(file, JSON.stringify(experiment)); await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/experiment-identity"));
 });
 
 test("experiment reporting rejects ambiguous or undeclared configuration IDs", async () => {
@@ -296,6 +309,19 @@ test("canonical campaign and run result artifacts are discovered and schema-vali
   const campaignDirectory = join(fixture, "results/demo/campaign"); const runDirectory = join(campaignDirectory, "runs/01J00000000000000000000000"); await mkdir(runDirectory, { recursive: true });
   for (const file of [join(campaignDirectory, "campaign.json"), join(runDirectory, "request.json"), join(runDirectory, "run.json"), join(runDirectory, "evaluator.json")]) await writeFile(file, '{"schema_version":"0.2.0"}');
   await assert.rejects(validateRepository(fixture), (error: unknown) => error instanceof ValidationError && ["campaign.json", "request.json", "run.json", "evaluator.json"].every((name) => error.diagnostics.some((item) => item.file.endsWith(name) && item.code === "schema/required")));
+});
+
+test("campaign and run manifest paths match their declared identities", async () => {
+  const fixture = await mkdtemp(join(tmpdir(), "aht-repo-")); await cp(join(root, "spec/schemas"), join(fixture, "spec/schemas"), { recursive: true }); await mkdir(join(fixture, "spec/examples"), { recursive: true });
+  const campaign = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/campaign.example.json"), "utf8"));
+  const request = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/run-request.example.json"), "utf8"));
+  const result = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/run-result.example.json"), "utf8"));
+  const campaignDirectory = join(fixture, "results", campaign.experiment.id, campaign.campaign_id); const runDirectory = join(campaignDirectory, "runs", request.run_id); await mkdir(runDirectory, { recursive: true });
+  const campaignFile = join(campaignDirectory, "campaign.json"), requestFile = join(runDirectory, "request.json"), resultFile = join(runDirectory, "run.json");
+  await writeFile(campaignFile, JSON.stringify(campaign)); await writeFile(requestFile, JSON.stringify(request)); await writeFile(resultFile, JSON.stringify(result)); await validateRepository(fixture);
+  campaign.experiment.id = "other-experiment"; await writeFile(campaignFile, JSON.stringify(campaign)); await assert.rejects(validateRepository(fixture), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/campaign-identity"));
+  campaign.experiment.id = request.experiment.id; await writeFile(campaignFile, JSON.stringify(campaign)); request.campaign_id = "other-campaign"; await writeFile(requestFile, JSON.stringify(request)); await assert.rejects(validateRepository(fixture), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-request-identity"));
+  request.campaign_id = result.campaign_id; await writeFile(requestFile, JSON.stringify(request)); result.run_id = "01J00000000000000000000099"; await writeFile(resultFile, JSON.stringify(result)); await assert.rejects(validateRepository(fixture), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-result-identity"));
 });
 
 test("noncanonical result reports are ignored even with exact names or canonical-looking directories", async () => {
