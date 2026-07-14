@@ -1,0 +1,27 @@
+{
+  "name": "agent-harness-test",
+  "version": "0.2.0-draft",
+  "private": true,
+  "description": "Deterministic framework validation for Agent Harness Test.",
+  "type": "module",
+  "packageManager": "npm@11.7.0",
+  "engines": { "node": ">=24 <25", "npm": ">=11 <12" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/**/*.test.ts",
+    "validate": "tsx src/cli.ts validate",
+    "validate:file": "tsx src/cli.ts file"
+  },
+  "dependencies": {
+    "ajv": "8.17.1",
+    "ajv-formats": "3.0.1",
+    "json-dup-key-validator": "1.0.3",
+    "json-canonicalize": "1.0.6",
+    "yaml": "2.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "tsx": "4.20.5",
+    "typescript": "5.9.2"
+  }
+}

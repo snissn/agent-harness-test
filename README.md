@@ -25,6 +25,7 @@ runner or released benchmark tasks.
 - [SPEC.md](SPEC.md) is the normative framework specification.
 - [spec/schemas](spec/schemas) contains JSON Schemas for manifests and results.
 - [spec/examples](spec/examples) contains non-runnable structural examples.
+- [docs/validation.md](docs/validation.md) documents the deterministic local and CI validation gate.
 
 ## Core principles
 
