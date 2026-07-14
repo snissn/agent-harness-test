@@ -124,6 +124,16 @@ async function addValidExperiment(fixture: { root: string; task: Record<string, 
   return { experiment, file };
 }
 
+async function setTaskLifecycle(fixture: { root: string; taskFile: string; task: Record<string, any> }, status: "draft" | "candidate" | "released" | "retired"): Promise<void> {
+  fixture.task.status = status;
+  if (status === "released" || status === "retired") {
+    const evidence = `{"status":"${status}"}\n`;
+    setCalibration(fixture.task, status, `sha256:${sha256(evidence)}`);
+    await writeFile(join(fixture.root, "tasks/demo/1.0.0/calibration.json"), evidence);
+  }
+  await writeFile(fixture.taskFile, JSON.stringify(fixture.task));
+}
+
 test("repository semantics reject prompt digest, orphan artifacts, unknown evaluator tasks, and duplicate identities", async () => {
   const fixture = await semanticFixture();
   fixture.task.prompt = { ...(fixture.task.prompt as Record<string, unknown>), digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }; await writeFile(fixture.taskFile, JSON.stringify(fixture.task));
@@ -206,6 +216,22 @@ test("suite task references are unique by task ID and version", async () => {
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.message.includes("duplicate suite task reference demo@1.0.0"));
 });
 
+test("released and retired suites accept only their immutable task lifecycles", async () => {
+  for (const taskStatus of ["released", "retired"] as const) {
+    const fixture = await semanticFixture(); await setTaskLifecycle(fixture, taskStatus); const suite = await addValidSuite(fixture); suite.status = "retired"; await writeFile(join(fixture.root, "suites/demo-breadth/1.0.0.json"), JSON.stringify(suite)); await validateRepository(fixture.root);
+  }
+  const fixture = await semanticFixture(); await setTaskLifecycle(fixture, "released"); const suite = await addValidSuite(fixture); suite.status = "released"; await writeFile(join(fixture.root, "suites/demo-breadth/1.0.0.json"), JSON.stringify(suite)); await validateRepository(fixture.root);
+  await setTaskLifecycle(fixture, "retired"); suite.tasks[0].spec_digest = manifestDigest(fixture.task); await writeFile(join(fixture.root, "suites/demo-breadth/1.0.0.json"), JSON.stringify(suite));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.message.includes("released suite references non-released task demo@1.0.0"));
+});
+
+test("retired suites reject mutable draft and candidate tasks", async () => {
+  for (const taskStatus of ["draft", "candidate"] as const) {
+    const fixture = await semanticFixture(); await setTaskLifecycle(fixture, taskStatus); const suite = await addValidSuite(fixture); suite.status = "retired"; await writeFile(join(fixture.root, "suites/demo-breadth/1.0.0.json"), JSON.stringify(suite));
+    await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.message.includes("retired suite references mutable task demo@1.0.0"));
+  }
+});
+
 test("task scoring check IDs are unique without requiring an evaluation artifact", async () => {
   const fixture = await semanticFixture(); const checks = (fixture.task.scoring as Record<string, any>).checks; checks.push(checks[0]); await writeFile(fixture.taskFile, JSON.stringify(fixture.task)); await assert.rejects(validateRepository(fixture.root), /task scoring check IDs must be unique/);
 });
@@ -244,6 +270,20 @@ test("experiment reporting rejects ambiguous or undeclared configuration IDs", a
   experiment.reporting.comparisons[0].candidate_configuration_ids = ["codex-high", "codex-high"];
   await writeFile(file, JSON.stringify(experiment));
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "schema/uniqueItems"));
+});
+
+test("experiment task selection accepts suite task IDs for include and exclude", async () => {
+  const fixture = await semanticFixture(); const { experiment, file } = await addValidExperiment(fixture);
+  experiment.task_selection = { include: ["demo"] }; await writeFile(file, JSON.stringify(experiment)); await validateRepository(fixture.root);
+  experiment.task_selection = { exclude: ["demo"] }; await writeFile(file, JSON.stringify(experiment)); await validateRepository(fixture.root);
+});
+
+test("experiment task selection rejects include and exclude IDs absent from its suite", async () => {
+  const fixture = await semanticFixture(); const { experiment, file } = await addValidExperiment(fixture);
+  for (const mode of ["include", "exclude"] as const) {
+    experiment.task_selection = { [mode]: ["missing-task"] }; await writeFile(file, JSON.stringify(experiment));
+    await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.message.includes("task_selection references task ID not present in suite: missing-task"));
+  }
 });
 
 test("canonical campaign and run result artifacts are discovered and schema-validated", async () => {

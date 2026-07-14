@@ -181,6 +181,7 @@ export async function validateRepository(rootInput: string): Promise<void> {
         try { const path = asString(task.spec_path); if (!safeRelativePath(path) || resolve(root, path) !== resolve(target.file)) diagnostics.push({ file: suite.file, code: "semantic/task-path", message: `task spec_path does not resolve to ${asString(task.id)}@${asString(task.version)}` }); }
         catch { diagnostics.push({ file: suite.file, code: "semantic/task-path", message: `unsafe task spec_path for ${asString(task.id)}@${asString(task.version)}` }); }
         if (suiteStatus === "released" && asString(target.value.status) !== "released") diagnostics.push({ file: suite.file, code: "semantic/released-suite", message: `released suite references non-released task ${asString(task.id)}@${asString(task.version)}` });
+        if (suiteStatus === "retired" && !["released", "retired"].includes(asString(target.value.status))) diagnostics.push({ file: suite.file, code: "semantic/retired-suite", message: `retired suite references mutable task ${asString(task.id)}@${asString(task.version)}` });
         if (task.spec_digest !== undefined && asString(task.spec_digest) !== manifestDigest(target.value)) diagnostics.push({ file: suite.file, code: "semantic/task-digest", message: `task digest mismatch for ${asString(task.id)}@${asString(task.version)}` });
       }
     }
@@ -206,6 +207,12 @@ export async function validateRepository(rootInput: string): Promise<void> {
       try { const path = asString(reference.spec_path); if (!safeRelativePath(path) || resolve(root, path) !== resolve(target.file)) diagnostics.push({ file: experiment.file, code: "semantic/suite-path", message: `suite spec_path does not resolve to ${asString(reference.id)}@${asString(reference.version)}` }); }
       catch { diagnostics.push({ file: experiment.file, code: "semantic/suite-path", message: `unsafe suite spec_path for ${asString(reference.id)}@${asString(reference.version)}` }); }
       if (asString(reference.spec_digest) !== manifestDigest(target.value)) diagnostics.push({ file: experiment.file, code: "semantic/suite-digest", message: `suite digest mismatch for ${asString(reference.id)}@${asString(reference.version)}` });
+      if (experiment.value.task_selection !== undefined) {
+        const selection = asObject(experiment.value.task_selection);
+        const selectedIds = (selection.include ?? selection.exclude) as unknown[];
+        const suiteTaskIds = new Set((target.value.tasks as unknown[]).map((item) => asString(asObject(item).id)));
+        for (const selectedId of selectedIds.map(asString)) if (!suiteTaskIds.has(selectedId)) diagnostics.push({ file: experiment.file, code: "semantic/task-selection", message: `task_selection references task ID not present in suite: ${selectedId}` });
+      }
     }
   }
   for (const evaluation of repositoryManifests.filter((item) => item.kind === "evaluation")) {
