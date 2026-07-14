@@ -55,6 +55,7 @@ async function canonicalArtifactDirectories(tasksDirectory: string): Promise<str
 }
 
 function insideExamples(file: string): boolean { return file.includes(`${sep}spec${sep}examples${sep}`); }
+function manifestOwnedPath(file: string): boolean { const parts = file.split(/[\\/]/); return parts.includes("suites") || parts.includes("experiments"); }
 function identity(manifest: Manifest): string | undefined {
   if (["task", "suite", "experiment"].includes(manifest.kind)) return `${asString(manifest.value.id)}@${asString(manifest.value.version)}`;
   if (manifest.kind === "campaign") return asString(manifest.value.campaign_id);
@@ -73,7 +74,7 @@ export async function validateRepository(rootInput: string): Promise<void> {
   for (const directory of ["tasks", "suites", "experiments", "results"]) await walk(join(root, directory), repoFiles);
   for (const file of [...exampleFiles, ...repoFiles].sort()) {
     const kind = kindFromPath(file);
-    if (!kind) continue;
+    if (!kind) { if (manifestOwnedPath(file)) diagnostics.push({ file, code: "semantic/unknown-manifest", message: "cannot infer manifest schema kind from a manifest-owned path" }); continue; }
     try { const value = asObject(await loadManifest(file)); schemas.validate(kind, value, file); manifests.push({ file, kind, value }); }
     catch (error) { diagnostics.push(...(error instanceof ValidationError ? error.diagnostics : [{ file, code: "internal", message: error instanceof Error ? error.message : String(error) }])); }
   }
@@ -128,22 +129,39 @@ export async function validateRepository(rootInput: string): Promise<void> {
   for (const artifact of artifacts) {
     if (!taskRoots.has(join(artifact, ".."))) diagnostics.push({ file: artifact, code: "semantic/orphan-artifact", message: "state/evaluator artifact has no co-located task spec" });
   }
+  const suiteByIdentity = new Map<string, Manifest>();
   for (const suite of repositoryManifests.filter((item) => item.kind === "suite")) {
+    suiteByIdentity.set(`${asString(suite.value.id)}@${asString(suite.value.version)}`, suite);
     const suiteStatus = asString(suite.value.status);
     for (const item of suite.value.tasks as unknown[]) {
       const task = asObject(item), target = taskByIdentity.get(`${asString(task.id)}@${asString(task.version)}`);
       if (!target) diagnostics.push({ file: suite.file, code: "semantic/task-reference", message: `missing task ${asString(task.id)}@${asString(task.version)}` });
-      else if (suiteStatus === "released" && asString(target.value.status) !== "released") diagnostics.push({ file: suite.file, code: "semantic/released-suite", message: `released suite references non-released task ${asString(task.id)}@${asString(task.version)}` });
-      else if (asString(task.spec_digest) !== manifestDigest(target.value)) diagnostics.push({ file: suite.file, code: "semantic/task-digest", message: `task digest mismatch for ${asString(task.id)}@${asString(task.version)}` });
+      else {
+        try { const path = asString(task.spec_path); if (!safeRelativePath(path) || resolve(root, path) !== resolve(target.file)) diagnostics.push({ file: suite.file, code: "semantic/task-path", message: `task spec_path does not resolve to ${asString(task.id)}@${asString(task.version)}` }); }
+        catch { diagnostics.push({ file: suite.file, code: "semantic/task-path", message: `unsafe task spec_path for ${asString(task.id)}@${asString(task.version)}` }); }
+        if (suiteStatus === "released" && asString(target.value.status) !== "released") diagnostics.push({ file: suite.file, code: "semantic/released-suite", message: `released suite references non-released task ${asString(task.id)}@${asString(task.version)}` });
+        if (asString(task.spec_digest) !== manifestDigest(target.value)) diagnostics.push({ file: suite.file, code: "semantic/task-digest", message: `task digest mismatch for ${asString(task.id)}@${asString(task.version)}` });
+      }
+    }
+  }
+  for (const experiment of repositoryManifests.filter((item) => item.kind === "experiment")) {
+    const reference = asObject(experiment.value.suite), target = suiteByIdentity.get(`${asString(reference.id)}@${asString(reference.version)}`);
+    if (!target) diagnostics.push({ file: experiment.file, code: "semantic/suite-reference", message: `missing suite ${asString(reference.id)}@${asString(reference.version)}` });
+    else {
+      try { const path = asString(reference.spec_path); if (!safeRelativePath(path) || resolve(root, path) !== resolve(target.file)) diagnostics.push({ file: experiment.file, code: "semantic/suite-path", message: `suite spec_path does not resolve to ${asString(reference.id)}@${asString(reference.version)}` }); }
+      catch { diagnostics.push({ file: experiment.file, code: "semantic/suite-path", message: `unsafe suite spec_path for ${asString(reference.id)}@${asString(reference.version)}` }); }
+      if (asString(reference.spec_digest) !== manifestDigest(target.value)) diagnostics.push({ file: experiment.file, code: "semantic/suite-digest", message: `suite digest mismatch for ${asString(reference.id)}@${asString(reference.version)}` });
     }
   }
   for (const evaluation of repositoryManifests.filter((item) => item.kind === "evaluation")) {
     const task = taskByIdentity.get(`${asString(evaluation.value.task_id)}@${asString(evaluation.value.task_version)}`);
     if (!task) { diagnostics.push({ file: evaluation.file, code: "semantic/task-reference", message: `missing task ${asString(evaluation.value.task_id)}@${asString(evaluation.value.task_version)}` }); continue; }
     if (asString(evaluation.value.status) === "ok") {
-      const expected = new Set((asObject(task.value.scoring).checks as unknown[]).map((check) => asString(asObject(check).id)));
-      const actual = new Set((evaluation.value.checks as unknown[]).map((check) => asString(asObject(check).id)));
-      if (expected.size !== actual.size || [...expected].some((id) => !actual.has(id))) diagnostics.push({ file: evaluation.file, code: "semantic/check-ids", message: "evaluator check IDs must exactly match task scoring check IDs" });
+      const expectedIds = (asObject(task.value.scoring).checks as unknown[]).map((check) => asString(asObject(check).id));
+      const actualIds = (evaluation.value.checks as unknown[]).map((check) => asString(asObject(check).id));
+      const expected = new Set(expectedIds), actual = new Set(actualIds);
+      if (expected.size !== expectedIds.length) diagnostics.push({ file: task.file, code: "semantic/check-ids", message: "task scoring check IDs must be unique" });
+      if (actual.size !== actualIds.length || expected.size !== actual.size || [...expected].some((id) => !actual.has(id))) diagnostics.push({ file: evaluation.file, code: "semantic/check-ids", message: "evaluator check IDs must be unique and exactly match task scoring check IDs" });
     }
   }
   if (diagnostics.length) throw new ValidationError(diagnostics);

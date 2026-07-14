@@ -17,8 +17,8 @@ added without changing task definitions.
 ## Current status
 
 This repository currently contains the `0.2.0-draft` framework contract,
-schemas, and illustrative manifests. It does not yet contain an executable
-runner or released benchmark tasks.
+schemas, illustrative manifests, and a deterministic validation/CI gate. It
+does not yet contain an executable runner or released benchmark tasks.
 
 ## Start here
 

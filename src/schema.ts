@@ -19,6 +19,9 @@ export function kindFromPath(file: string): string | undefined {
     "campaign.example.json": "campaign", "evaluation.example.json": "evaluation", "run-request.example.json": "run-request", "run-result.example.json": "run-result"
   };
   if (exampleKinds[name]) return exampleKinds[name];
+  const parts = file.split(/[\\/]/);
+  if (parts.includes("suites")) return "suite";
+  if (parts.includes("experiments")) return "experiment";
   if (name === "task.yaml" || name === "task.yml" || name === "task.json") return "task";
   if (name === "evaluator.json") return "evaluation";
   if (name === "run-request.json") return "run-request";

@@ -14,6 +14,8 @@ const root = new URL("..", import.meta.url).pathname;
 test("all seven checked-in examples are discoverable and schema-validated", async () => {
   const expected = ["task", "suite", "experiment", "campaign", "evaluation", "run-request", "run-result"];
   for (const kind of expected) assert.equal(kindFromPath(join("spec/examples", `${kind}.example.json`)), kind);
+  assert.equal(kindFromPath("suites/smoke/1.0.0.yaml"), "suite");
+  assert.equal(kindFromPath("experiments/smoke/1.0.0.yaml"), "experiment");
   await validateRepository(root);
 });
 
@@ -24,6 +26,10 @@ test("loaders reject duplicate keys and forbidden YAML tags", () => {
   assert.throws(() => loadManifestText("1: value\n", "bad.yaml"), ValidationError);
   assert.throws(() => loadManifestText("a: &value {x: one}\nb: *value\n", "bad.yaml"), ValidationError);
   assert.throws(() => loadManifestText("base: &base {x: one}\nvalue:\n  <<: *base\n", "bad.yaml"), ValidationError);
+  assert.deepEqual(loadManifestText('note: "R&D &value"\n', "good.yaml"), { note: "R&D &value" });
+  assert.deepEqual(loadManifestText('note: "literal *value"\n', "good.yaml"), { note: "literal *value" });
+  assert.deepEqual(loadManifestText('note: "literal !word"\n', "good.yaml"), { note: "literal !word" });
+  assert.deepEqual(loadManifestText('note: "literal <<:"\n', "good.yaml"), { note: "literal <<:" });
 });
 
 test("strict schemas reject unknown fields and incompatible versions", async () => {
@@ -31,6 +37,8 @@ test("strict schemas reject unknown fields and incompatible versions", async () 
   const valid = loadManifestText(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/task.example.json"), "utf8"), "task.example.json") as Record<string, unknown>;
   assert.throws(() => validator.validate("task", { ...valid, unexpected: true }, "bad.json"), ValidationError);
   assert.throws(() => validator.validate("task", { ...valid, schema_version: "1.0.0" }, "bad.json"), ValidationError);
+  const suite = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/suite.example.json"), "utf8")); suite.tasks[0].spec_path = "tasks\\example-cli\\1.0.0\\task.yaml";
+  assert.throws(() => validator.validate("suite", suite, "bad-suite.json"), ValidationError);
 });
 
 test("RFC 8785 canonical JSON and manifest digest have stable vectors", () => {
@@ -89,8 +97,8 @@ test("repository semantics reject prompt digest, orphan artifacts, unknown evalu
 test("semantic suite and evaluator invariants reject released candidates, bad digests, and check-ID mismatch", async () => {
   const fixture = await semanticFixture(); await mkdir(join(fixture.root, "suites")); await mkdir(join(fixture.root, "results"));
   const suite = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/suite.example.json"), "utf8")); suite.tasks[0].id = "demo"; suite.tasks[0].spec_digest = manifestDigest(fixture.task); await writeFile(join(fixture.root, "suites/demo-suite.json"), JSON.stringify(suite));
-  const result = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/evaluation.example.json"), "utf8")); result.task_id = "demo"; result.checks = [result.checks[0]]; await writeFile(join(fixture.root, "results/evaluation.json"), JSON.stringify(result));
-  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.message.includes("released suite references non-released task") && error.message.includes("evaluator check IDs"));
+  const result = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/evaluation.example.json"), "utf8")); result.task_id = "demo"; result.checks = [result.checks[0], result.checks[0], result.checks[1]]; await writeFile(join(fixture.root, "results/evaluation.json"), JSON.stringify(result));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.message.includes("task spec_path does not resolve") && error.message.includes("released suite references non-released task") && error.message.includes("evaluator check IDs"));
   suite.status = "draft"; suite.tasks[0].spec_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"; await writeFile(join(fixture.root, "suites/demo-suite.json"), JSON.stringify(suite));
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.message.includes("task digest mismatch"));
 });
@@ -106,4 +114,11 @@ test("candidate git sources remain valid without pretending to materialize them"
   (fixture.task.problem_state as Record<string, unknown>).source = { kind: "git", repository: "https://example.test/demo.git", revision: "a".repeat(40) };
   await writeFile(fixture.taskFile, JSON.stringify(fixture.task));
   await validateRepository(fixture.root);
+});
+
+test("experiment suite references require the loaded suite path and digest", async () => {
+  const fixture = await semanticFixture(); await mkdir(join(fixture.root, "suites/demo-breadth"), { recursive: true }); await mkdir(join(fixture.root, "experiments/demo"), { recursive: true });
+  const suite = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/suite.example.json"), "utf8")); suite.status = "draft"; suite.tasks[0].id = "demo"; suite.tasks[0].spec_path = "tasks/demo/1.0.0/task.json"; suite.tasks[0].spec_digest = manifestDigest(fixture.task); await writeFile(join(fixture.root, "suites/demo-breadth/1.0.0.json"), JSON.stringify(suite));
+  const experiment = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/experiment.example.json"), "utf8")); experiment.suite.spec_path = "suites/wrong/1.0.0.json"; experiment.suite.spec_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"; await writeFile(join(fixture.root, "experiments/demo/1.0.0.json"), JSON.stringify(experiment));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.message.includes("suite spec_path does not resolve") && error.message.includes("suite digest mismatch"));
 });
