@@ -1,5 +1,5 @@
 import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
-import { join, posix, relative, resolve, sep } from "node:path";
+import { dirname, join, posix, relative, resolve, sep } from "node:path";
 import { manifestDigest, sha256, treeDigest } from "./digests.js";
 import { isManifestPath, loadManifest } from "./load.js";
 import { kindFromRepositoryPath, SchemaValidator } from "./schema.js";
@@ -134,6 +134,32 @@ export async function validateRepository(rootInput: string): Promise<void> {
         else byKindIdentity.set(key, manifest);
       }
     } catch (error) { diagnostics.push({ file: manifest.file, code: "semantic/identity", message: error instanceof Error ? error.message : String(error) }); }
+  }
+  const runResultsByFile = new Map(repositoryManifests.filter((manifest) => manifest.kind === "run-result").map((manifest) => [resolve(manifest.file), manifest]));
+  for (const campaign of repositoryManifests.filter((manifest) => manifest.kind === "campaign")) {
+    const campaignDirectory = relative(root, dirname(campaign.file)).split(sep).join("/");
+    const campaignId = asString(campaign.value.campaign_id), campaignExperiment = asObject(campaign.value.experiment), campaignSuite = asObject(campaign.value.suite);
+    for (const item of campaign.value.runs as unknown[]) {
+      const reference = asObject(item), runId = asString(reference.run_id), path = asString(reference.path);
+      const expectedPath = `runs/${runId}/run.json`;
+      if (!safeRelativePath(path) || path !== expectedPath) {
+        diagnostics.push({ file: campaign.file, code: "semantic/campaign-run-path", message: `campaign run ${runId} must use canonical path ${expectedPath}` });
+        continue;
+      }
+      let target: Manifest | undefined;
+      try { target = runResultsByFile.get(await resolveSafe(root, `${campaignDirectory}/${path}`)); }
+      catch (error) { diagnostics.push({ file: campaign.file, code: "semantic/campaign-run-path", message: error instanceof Error ? error.message : String(error) }); continue; }
+      if (!target) { diagnostics.push({ file: campaign.file, code: "semantic/campaign-run-reference", message: `missing run result ${path}` }); continue; }
+      const targetExperiment = asObject(target.value.experiment), targetSuite = asObject(target.value.suite);
+      const linked = asString(target.value.run_id) === runId
+        && asString(target.value.campaign_id) === campaignId
+        && asString(targetExperiment.id) === asString(campaignExperiment.id)
+        && asString(targetExperiment.version) === asString(campaignExperiment.version)
+        && asString(targetSuite.id) === asString(campaignSuite.id)
+        && asString(targetSuite.version) === asString(campaignSuite.version);
+      if (!linked) diagnostics.push({ file: campaign.file, code: "semantic/campaign-run-identity", message: `run result identity does not match campaign reference ${runId}` });
+      if (asString(reference.digest) !== manifestDigest(target.value)) diagnostics.push({ file: campaign.file, code: "semantic/campaign-run-digest", message: `run result digest mismatch for ${runId}` });
+    }
   }
   const taskByIdentity = new Map<string, Manifest>();
   for (const manifest of repositoryManifests.filter((item) => item.kind === "task")) {

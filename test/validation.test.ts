@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cp, mkdtemp, mkdir, readdir, symlink, writeFile, chmod, utimes } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, readdir, symlink, unlink, writeFile, chmod, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -123,6 +123,17 @@ async function addValidExperiment(fixture: { root: string; task: Record<string, 
   const file = join(fixture.root, "experiments/demo/1.0.0.json");
   await writeFile(file, JSON.stringify(experiment));
   return { experiment, file };
+}
+
+async function campaignRunFixture(): Promise<{ root: string; campaign: Record<string, any>; campaignFile: string; result: Record<string, any>; resultFile: string }> {
+  const fixture = await mkdtemp(join(tmpdir(), "aht-repo-")); await cp(join(root, "spec/schemas"), join(fixture, "spec/schemas"), { recursive: true }); await mkdir(join(fixture, "spec/examples"), { recursive: true });
+  const campaign = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/campaign.example.json"), "utf8"));
+  const result = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/run-result.example.json"), "utf8"));
+  const campaignDirectory = join(fixture, "results", campaign.experiment.id, campaign.campaign_id); const runDirectory = join(campaignDirectory, "runs", result.run_id); await mkdir(runDirectory, { recursive: true });
+  const campaignFile = join(campaignDirectory, "campaign.json"), resultFile = join(runDirectory, "run.json");
+  campaign.runs = [{ run_id: result.run_id, path: `runs/${result.run_id}/run.json`, digest: manifestDigest(result) }];
+  await writeFile(campaignFile, JSON.stringify(campaign)); await writeFile(resultFile, JSON.stringify(result));
+  return { root: fixture, campaign, campaignFile, result, resultFile };
 }
 
 async function setTaskLifecycle(fixture: { root: string; taskFile: string; task: Record<string, any> }, status: "draft" | "candidate" | "released" | "retired"): Promise<void> {
@@ -312,16 +323,40 @@ test("canonical campaign and run result artifacts are discovered and schema-vali
 });
 
 test("campaign and run manifest paths match their declared identities", async () => {
-  const fixture = await mkdtemp(join(tmpdir(), "aht-repo-")); await cp(join(root, "spec/schemas"), join(fixture, "spec/schemas"), { recursive: true }); await mkdir(join(fixture, "spec/examples"), { recursive: true });
-  const campaign = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/campaign.example.json"), "utf8"));
+  const fixture = await campaignRunFixture(); const { campaign, campaignFile, result, resultFile } = fixture;
   const request = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/run-request.example.json"), "utf8"));
-  const result = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/run-result.example.json"), "utf8"));
-  const campaignDirectory = join(fixture, "results", campaign.experiment.id, campaign.campaign_id); const runDirectory = join(campaignDirectory, "runs", request.run_id); await mkdir(runDirectory, { recursive: true });
-  const campaignFile = join(campaignDirectory, "campaign.json"), requestFile = join(runDirectory, "request.json"), resultFile = join(runDirectory, "run.json");
-  await writeFile(campaignFile, JSON.stringify(campaign)); await writeFile(requestFile, JSON.stringify(request)); await writeFile(resultFile, JSON.stringify(result)); await validateRepository(fixture);
-  campaign.experiment.id = "other-experiment"; await writeFile(campaignFile, JSON.stringify(campaign)); await assert.rejects(validateRepository(fixture), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/campaign-identity"));
-  campaign.experiment.id = request.experiment.id; await writeFile(campaignFile, JSON.stringify(campaign)); request.campaign_id = "other-campaign"; await writeFile(requestFile, JSON.stringify(request)); await assert.rejects(validateRepository(fixture), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-request-identity"));
-  request.campaign_id = result.campaign_id; await writeFile(requestFile, JSON.stringify(request)); result.run_id = "01J00000000000000000000099"; await writeFile(resultFile, JSON.stringify(result)); await assert.rejects(validateRepository(fixture), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-result-identity"));
+  const requestFile = join(resultFile, "..", "request.json"); await writeFile(requestFile, JSON.stringify(request)); await validateRepository(fixture.root);
+  campaign.experiment.id = "other-experiment"; await writeFile(campaignFile, JSON.stringify(campaign)); await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/campaign-identity"));
+  campaign.experiment.id = request.experiment.id; await writeFile(campaignFile, JSON.stringify(campaign)); request.campaign_id = "other-campaign"; await writeFile(requestFile, JSON.stringify(request)); await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-request-identity"));
+  request.campaign_id = result.campaign_id; await writeFile(requestFile, JSON.stringify(request)); result.run_id = "01J00000000000000000000099"; await writeFile(resultFile, JSON.stringify(result)); await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-result-identity"));
+});
+
+test("campaign run references resolve to canonical run results", async () => {
+  const fixture = await campaignRunFixture(); await validateRepository(fixture.root);
+});
+
+test("campaign run references require their run-result target", async () => {
+  const fixture = await campaignRunFixture(); await unlink(fixture.resultFile);
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/campaign-run-reference"));
+});
+
+test("campaign run references require canonical paths aligned with run IDs", async () => {
+  const fixture = await campaignRunFixture(); fixture.campaign.runs[0].path = `runs/${fixture.result.run_id}/request.json`; await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/campaign-run-path"));
+  fixture.campaign.runs[0].path = `runs/${fixture.result.run_id}/run.json`; fixture.campaign.runs[0].run_id = "01J00000000000000000000099"; await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/campaign-run-path"));
+});
+
+test("campaign run targets retain campaign identity linkage", async () => {
+  const fixture = await campaignRunFixture(); fixture.result.experiment.version = "2.0.0"; fixture.campaign.runs[0].digest = manifestDigest(fixture.result); await writeFile(fixture.resultFile, JSON.stringify(fixture.result)); await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/campaign-run-identity") && !error.diagnostics.some((item) => item.code === "semantic/campaign-run-digest"));
+});
+
+test("campaign run references reject stale digests and mutated run results", async () => {
+  const fixture = await campaignRunFixture(); fixture.campaign.runs[0].digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"; await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/campaign-run-digest"));
+  fixture.campaign.runs[0].digest = manifestDigest(fixture.result); await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign)); fixture.result.warnings.push("mutated after campaign finalization"); await writeFile(fixture.resultFile, JSON.stringify(fixture.result));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/campaign-run-digest"));
 });
 
 test("noncanonical result reports are ignored even with exact names or canonical-looking directories", async () => {
