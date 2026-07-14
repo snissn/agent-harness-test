@@ -121,6 +121,8 @@ export async function validateRepository(rootInput: string): Promise<void> {
   for (const manifest of repositoryManifests.filter((item) => item.kind === "task")) {
     const id = asString(manifest.value.id), version = asString(manifest.value.version), status = asString(manifest.value.status);
     const taskRoot = `tasks/${id}/${version}`;
+    const manifestPath = relative(root, manifest.file).split(sep).join("/");
+    if (![`${taskRoot}/task.json`, `${taskRoot}/task.yaml`, `${taskRoot}/task.yml`].includes(manifestPath)) diagnostics.push({ file: manifest.file, code: "semantic/task-identity", message: `task manifest path does not match declared identity ${id}@${version}` });
     taskByIdentity.set(`${id}@${version}`, manifest);
     try {
       const prompt = asObject(manifest.value.prompt), state = asObject(manifest.value.problem_state), source = asObject(state.source), evaluator = asObject(manifest.value.evaluator);
@@ -132,7 +134,6 @@ export async function validateRepository(rootInput: string): Promise<void> {
       const paths = [asString(prompt.path), asString(evaluator.path), ...optionalPaths].filter((value): value is string => Boolean(value));
       for (const path of paths) await resolveSafe(root, path);
       if (nonDraft.has(status)) {
-        if (!new RegExp(`^${taskRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/task\\.(json|ya?ml)$`).test(relative(root, manifest.file).split(sep).join("/"))) throw new Error("candidate/released/retired task spec must be co-located at tasks/<id>/<version>/task.{json,yaml,yml}");
         if (asString(prompt.path) !== `${taskRoot}/prompt.md` || asString(evaluator.path) !== `${taskRoot}/evaluator`) throw new Error("candidate/released/retired prompt and evaluator must be co-located with its task spec");
         const promptFile = await resolveSafe(root, asString(prompt.path));
         const evaluatorDirectory = await resolveSafe(root, asString(evaluator.path));

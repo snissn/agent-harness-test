@@ -84,13 +84,13 @@ test("repository paths fail closed for escapes and collisions", () => {
   assert.equal(safeRelativePath("tasks/example/1.0.0/task.yaml"), true);
 });
 
-async function semanticFixture(): Promise<{ root: string; taskFile: string; task: Record<string, unknown> }> {
+async function semanticFixture(taskId = "demo"): Promise<{ root: string; taskFile: string; task: Record<string, unknown> }> {
   const fixture = await mkdtemp(join(tmpdir(), "aht-repo-"));
   await cp(join(root, "spec/schemas"), join(fixture, "spec/schemas"), { recursive: true }); await mkdir(join(fixture, "spec/examples"), { recursive: true });
-  const taskFile = join(fixture, "tasks/demo/1.0.0/task.json"); await mkdir(join(fixture, "tasks/demo/1.0.0/state"), { recursive: true }); await mkdir(join(fixture, "tasks/demo/1.0.0/evaluator"), { recursive: true });
-  await writeFile(join(fixture, "tasks/demo/1.0.0/prompt.md"), "prompt bytes\n"); await writeFile(join(fixture, "tasks/demo/1.0.0/state/file.txt"), "state"); await mkdir(join(fixture, "tasks/demo/1.0.0/state/suites")); await writeFile(join(fixture, "tasks/demo/1.0.0/state/task.json"), "not a manifest"); await writeFile(join(fixture, "tasks/demo/1.0.0/state/suites/my-suite.yaml"), "not: a framework suite"); await writeFile(join(fixture, "tasks/demo/1.0.0/evaluator/evaluate.py"), "evaluator"); await writeFile(join(fixture, "tasks/demo/1.0.0/evaluator/evaluator.json"), "not an evaluation artifact");
+  const taskRoot = `tasks/${taskId}/1.0.0`; const taskFile = join(fixture, taskRoot, "task.json"); await mkdir(join(fixture, taskRoot, "state"), { recursive: true }); await mkdir(join(fixture, taskRoot, "evaluator"), { recursive: true });
+  await writeFile(join(fixture, taskRoot, "prompt.md"), "prompt bytes\n"); await writeFile(join(fixture, taskRoot, "state/file.txt"), "state"); await mkdir(join(fixture, taskRoot, "state/suites")); await writeFile(join(fixture, taskRoot, "state/task.json"), "not a manifest"); await writeFile(join(fixture, taskRoot, "state/suites/my-suite.yaml"), "not: a framework suite"); await writeFile(join(fixture, taskRoot, "evaluator/evaluate.py"), "evaluator"); await writeFile(join(fixture, taskRoot, "evaluator/evaluator.json"), "not an evaluation artifact");
   const source = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/task.example.json"), "utf8")) as Record<string, any>;
-  source.id = "demo"; source.status = "candidate"; source.prompt.path = "tasks/demo/1.0.0/prompt.md"; source.prompt.digest = `sha256:${sha256("prompt bytes\n")}`; source.problem_state.source.path = "tasks/demo/1.0.0/state"; source.problem_state.expected_tree_digest = await treeDigest(join(fixture, "tasks/demo/1.0.0/state")); source.evaluator.path = "tasks/demo/1.0.0/evaluator"; source.evaluator.digest = await treeDigest(join(fixture, "tasks/demo/1.0.0/evaluator"));
+  source.id = taskId; source.status = "candidate"; source.prompt.path = `${taskRoot}/prompt.md`; source.prompt.digest = `sha256:${sha256("prompt bytes\n")}`; source.problem_state.source.path = `${taskRoot}/state`; source.problem_state.expected_tree_digest = await treeDigest(join(fixture, taskRoot, "state")); source.evaluator.path = `${taskRoot}/evaluator`; source.evaluator.digest = await treeDigest(join(fixture, taskRoot, "evaluator"));
   await writeFile(taskFile, JSON.stringify(source)); return { root: fixture, taskFile, task: source };
 }
 
@@ -201,6 +201,11 @@ test("draft task calibration metadata does not require materialized evidence", a
 
 test("task artifact trees are digest inputs, not framework manifest discovery roots", async () => {
   const fixture = await semanticFixture(); await validateRepository(fixture.root);
+});
+
+test("draft task manifest path must match its declared ID and version", async () => {
+  const fixture = await semanticFixture("foo"); fixture.task.id = "bar"; fixture.task.status = "draft"; await writeFile(fixture.taskFile, JSON.stringify(fixture.task));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/task-identity" && item.message.includes("bar@1.0.0")) && !error.diagnostics.some((item) => item.code === "semantic/task-artifact"));
 });
 
 test("draft suites may omit task spec digests", async () => {
