@@ -96,6 +96,13 @@ export async function validateRepository(rootInput: string): Promise<void> {
     const repositoryPath = relative(root, file).split(sep).join("/");
     const kind = kindFromPath(repositoryPath);
     if (!kind) { if (manifestOwnedPath(repositoryPath)) diagnostics.push({ file, code: "semantic/unknown-manifest", message: "cannot infer manifest schema kind from a manifest-owned path" }); continue; }
+    if (repositoryPath.startsWith("tasks/")) {
+      const fileType = await lstat(file);
+      if (fileType.isSymbolicLink() || !fileType.isFile()) {
+        diagnostics.push({ file, code: "semantic/task-manifest-type", message: "canonical task manifest must be a regular non-symlink file" });
+        continue;
+      }
+    }
     try { const value = asObject(await loadManifest(file)); schemas.validate(kind, value, file); manifests.push({ file, kind, value }); }
     catch (error) { diagnostics.push(...(error instanceof ValidationError ? error.diagnostics : [{ file, code: "internal", message: error instanceof Error ? error.message : String(error) }])); }
   }

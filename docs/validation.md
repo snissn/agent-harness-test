@@ -10,13 +10,17 @@ npm test
 npm run validate
 ```
 
-`npm run validate` loads every checked-in JSON/YAML manifest under the repository
-layout plus all structural examples. It rejects duplicate keys, YAML tags,
+`npm run validate` loads canonical checked-in JSON/YAML manifests under the
+repository layout plus all structural examples. Suite and experiment manifests
+must use their versioned canonical paths; result source manifests use the exact
+`campaign.json`, `request.json`, `run.json`, and `evaluator.json` names. Derived
+report JSON, including summary filenames that merely contain a manifest kind,
+is not treated as a source manifest. Validation rejects duplicate keys, YAML tags,
 anchors, aliases, merge keys, non-string mapping keys, non-JSON YAML values,
 unsafe/escaping paths, schema errors, and the implemented
 cross-file invariants. Diagnostics use `file [rule] path: message` and exit
 nonzero on any invalid input. Validate one named file structurally with
-`npm run validate:file -- path/to/task.yaml`.
+`npm run validate:file -- tasks/<id>/<version>/task.yaml`.
 
 Task authors should add a failing fixture/test first, update `SPEC.md` and its
 schema before using a new concept, then add the valid manifest/artifacts and

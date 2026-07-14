@@ -20,17 +20,17 @@ export function kindFromPath(file: string): string | undefined {
   };
   if (exampleKinds[name]) return exampleKinds[name];
   const parts = file.replace(/^\.\//, "").split(/[\\/]/);
-  if (parts[0] === "suites") return "suite";
-  if (parts[0] === "experiments") return "experiment";
-  if (parts[0] === "results" && name === "request.json") return "run-request";
-  if (name === "task.yaml" || name === "task.yml" || name === "task.json") return "task";
-  if (name === "evaluator.json") return "evaluation";
-  if (name === "run-request.json") return "run-request";
-  if (name === "run-result.json" || name === "run.json") return "run-result";
-  if (name.includes("suite")) return "suite";
-  if (name.includes("experiment")) return "experiment";
-  if (name.includes("campaign")) return "campaign";
-  if (name.includes("evaluation")) return "evaluation";
+  const versionedManifest = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\.(json|ya?ml)$/i;
+  for (const [directory, kind] of [["suites", "suite"], ["experiments", "experiment"]] as const) {
+    const index = parts.lastIndexOf(directory);
+    if (index >= 0) return parts.length === index + 3 && versionedManifest.test(parts[index + 2]!) ? kind : undefined;
+  }
+  const exactKinds: Record<string, string> = {
+    "task.json": "task", "task.yaml": "task", "task.yml": "task", "campaign.json": "campaign",
+    "request.json": "run-request", "run-request.json": "run-request", "run.json": "run-result",
+    "run-result.json": "run-result", "evaluator.json": "evaluation"
+  };
+  if (exactKinds[name]) return exactKinds[name];
   return undefined;
 }
 

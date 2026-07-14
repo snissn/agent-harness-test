@@ -17,7 +17,12 @@ test("all seven checked-in examples are discoverable and schema-validated", asyn
   assert.equal(kindFromPath("suites/smoke/1.0.0.yaml"), "suite");
   assert.equal(kindFromPath("experiments/smoke/1.0.0.yaml"), "experiment");
   assert.equal(kindFromPath("results/campaigns/demo/runs/01J00000000000000000000000/request.json"), "run-request");
+  assert.equal(kindFromPath("results/demo/campaign/run-result.json"), "run-result");
+  assert.equal(kindFromPath("results/demo/campaign/runs/run/evaluator.json"), "evaluation");
   assert.equal(kindFromPath("tasks/demo/1.0.0/state/suites/data.json"), undefined);
+  assert.equal(kindFromPath("suites/demo/campaign.json"), undefined);
+  assert.equal(kindFromPath("experiments/demo/notes.json"), undefined);
+  for (const name of ["suite-summary.json", "experiment-notes.json", "campaign-report.json", "evaluation-breakdown.json"]) assert.equal(kindFromPath(`results/demo/reports/${name}`), undefined);
   await validateRepository(root);
 });
 
@@ -122,18 +127,18 @@ test("repository semantics reject prompt digest, orphan artifacts, unknown evalu
   const fixture = await semanticFixture();
   fixture.task.prompt = { ...(fixture.task.prompt as Record<string, unknown>), digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }; await writeFile(fixture.taskFile, JSON.stringify(fixture.task));
   await mkdir(join(fixture.root, "tasks/orphan/1.0.0/state"), { recursive: true });
-  await mkdir(join(fixture.root, "results"), { recursive: true });
-  const evaluation = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/evaluation.example.json"), "utf8")); evaluation.task_id = "missing"; await writeFile(join(fixture.root, "results/evaluation.json"), JSON.stringify(evaluation));
-  await mkdir(join(fixture.root, "suites"), { recursive: true }); const suite = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/suite.example.json"), "utf8")); await writeFile(join(fixture.root, "suites/one-suite.json"), JSON.stringify(suite)); await writeFile(join(fixture.root, "suites/two-suite.json"), JSON.stringify(suite));
+  const resultDirectory = join(fixture.root, "results/demo/campaign/runs/run"); await mkdir(resultDirectory, { recursive: true });
+  const evaluation = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/evaluation.example.json"), "utf8")); evaluation.task_id = "missing"; await writeFile(join(resultDirectory, "evaluator.json"), JSON.stringify(evaluation));
+  await mkdir(join(fixture.root, "suites/one-suite"), { recursive: true }); await mkdir(join(fixture.root, "suites/two-suite"), { recursive: true }); const suite = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/suite.example.json"), "utf8")); await writeFile(join(fixture.root, "suites/one-suite/1.0.0.json"), JSON.stringify(suite)); await writeFile(join(fixture.root, "suites/two-suite/1.0.0.json"), JSON.stringify(suite));
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && ["prompt digest mismatch", "state/evaluator artifact has no co-located task spec", "missing task missing@1.0.0", "duplicate suite identity"].every((fragment) => error.message.includes(fragment)));
 });
 
 test("semantic suite and evaluator invariants reject released candidates, bad digests, and check-ID mismatch", async () => {
-  const fixture = await semanticFixture(); await mkdir(join(fixture.root, "suites")); await mkdir(join(fixture.root, "results"));
-  const suite = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/suite.example.json"), "utf8")); suite.tasks[0].id = "demo"; suite.tasks[0].spec_digest = manifestDigest(fixture.task); await writeFile(join(fixture.root, "suites/demo-suite.json"), JSON.stringify(suite));
-  const result = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/evaluation.example.json"), "utf8")); result.task_id = "demo"; result.checks = [result.checks[0], result.checks[0], result.checks[1]]; await writeFile(join(fixture.root, "results/evaluation.json"), JSON.stringify(result));
+  const fixture = await semanticFixture(); await mkdir(join(fixture.root, "suites/demo-suite"), { recursive: true }); const resultDirectory = join(fixture.root, "results/demo/campaign/runs/run"); await mkdir(resultDirectory, { recursive: true });
+  const suite = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/suite.example.json"), "utf8")); suite.tasks[0].id = "demo"; suite.tasks[0].spec_digest = manifestDigest(fixture.task); await writeFile(join(fixture.root, "suites/demo-suite/1.0.0.json"), JSON.stringify(suite));
+  const result = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/evaluation.example.json"), "utf8")); result.task_id = "demo"; result.checks = [result.checks[0], result.checks[0], result.checks[1]]; await writeFile(join(resultDirectory, "evaluator.json"), JSON.stringify(result));
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.message.includes("task spec_path does not resolve") && error.message.includes("released suite references non-released task") && error.message.includes("evaluator check IDs"));
-  suite.status = "draft"; suite.tasks[0].spec_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"; await writeFile(join(fixture.root, "suites/demo-suite.json"), JSON.stringify(suite));
+  suite.status = "draft"; suite.tasks[0].spec_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"; await writeFile(join(fixture.root, "suites/demo-suite/1.0.0.json"), JSON.stringify(suite));
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.message.includes("task digest mismatch"));
 });
 
@@ -240,7 +245,24 @@ test("experiment reporting rejects ambiguous or undeclared configuration IDs", a
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "schema/uniqueItems"));
 });
 
-test("canonical results request.json artifacts are discovered and schema-validated", async () => {
-  const fixture = await mkdtemp(join(tmpdir(), "aht-repo-")); await cp(join(root, "spec/schemas"), join(fixture, "spec/schemas"), { recursive: true }); await mkdir(join(fixture, "spec/examples"), { recursive: true }); const directory = join(fixture, "results/campaigns/demo/runs/01J00000000000000000000000"); await mkdir(directory, { recursive: true }); await writeFile(join(directory, "request.json"), '{"schema_version":"0.2.0"}');
-  await assert.rejects(validateRepository(fixture), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.file.endsWith("request.json") && item.code === "schema/required"));
+test("canonical campaign and run result artifacts are discovered and schema-validated", async () => {
+  const fixture = await mkdtemp(join(tmpdir(), "aht-repo-")); await cp(join(root, "spec/schemas"), join(fixture, "spec/schemas"), { recursive: true }); await mkdir(join(fixture, "spec/examples"), { recursive: true });
+  const campaignDirectory = join(fixture, "results/demo/campaign"); const runDirectory = join(campaignDirectory, "runs/01J00000000000000000000000"); await mkdir(runDirectory, { recursive: true });
+  for (const file of [join(campaignDirectory, "campaign.json"), join(runDirectory, "request.json"), join(runDirectory, "run.json"), join(runDirectory, "evaluator.json")]) await writeFile(file, '{"schema_version":"0.2.0"}');
+  await assert.rejects(validateRepository(fixture), (error: unknown) => error instanceof ValidationError && ["campaign.json", "request.json", "run.json", "evaluator.json"].every((name) => error.diagnostics.some((item) => item.file.endsWith(name) && item.code === "schema/required")));
+});
+
+test("derived report JSON with manifest-kind substrings is ignored", async () => {
+  const fixture = await mkdtemp(join(tmpdir(), "aht-repo-")); await cp(join(root, "spec/schemas"), join(fixture, "spec/schemas"), { recursive: true }); await mkdir(join(fixture, "spec/examples"), { recursive: true });
+  const reports = join(fixture, "results/demo/campaign/reports"); await mkdir(reports, { recursive: true });
+  for (const name of ["suite-summary.json", "experiment-notes.json", "campaign-report.json", "evaluation-breakdown.json"]) await writeFile(join(reports, name), "{ not a manifest }");
+  await validateRepository(fixture);
+});
+
+test("canonical task manifests reject symlinks without following external targets", async () => {
+  const fixture = await mkdtemp(join(tmpdir(), "aht-repo-")); await cp(join(root, "spec/schemas"), join(fixture, "spec/schemas"), { recursive: true }); await mkdir(join(fixture, "spec/examples"), { recursive: true });
+  const outside = await mkdtemp(join(tmpdir(), "aht-external-")); const externalTask = join(outside, "task.json");
+  const task = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/task.example.json"), "utf8")); task.status = "draft"; await writeFile(externalTask, JSON.stringify(task));
+  const taskDirectory = join(fixture, "tasks/demo/1.0.0"); await mkdir(taskDirectory, { recursive: true }); await symlink(externalTask, join(taskDirectory, "task.json"));
+  await assert.rejects(validateRepository(fixture), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/task-manifest-type" && item.message.includes("regular non-symlink file")));
 });
