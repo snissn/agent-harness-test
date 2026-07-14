@@ -38,7 +38,7 @@ function assertJsonSafeYaml(node: unknown): void {
 
 export function loadManifestText(text: string, file = "<input>"): unknown {
   try {
-    if (file.endsWith(".json")) return jsonValue(parseJson(text, false));
+    if (extname(file).toLowerCase() === ".json") return jsonValue(parseJson(text, false));
     if (!/\.(ya?ml)$/i.test(file)) throw new Error("manifest must use .json, .yaml, or .yml");
     const document = parseDocument(text, { uniqueKeys: true, merge: false, prettyErrors: false, schema: "core" });
     if (document.errors.length > 0) throw new Error(document.errors.map((error) => error.message).join("; "));

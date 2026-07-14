@@ -10,11 +10,17 @@ type Manifest = { file: string; kind: string; value: ObjectValue };
 const nonDraft = new Set(["candidate", "released", "retired"]);
 
 export function safeRelativePath(value: string): boolean {
-  return value.length > 0 && !value.includes("\\") && !value.includes("\0") && !posix.isAbsolute(value) && value === posix.normalize(value) && !value.split("/").some((part) => !part || part === "." || part === "..");
+  return value.length > 0 && !value.includes("\\") && !value.includes("\0") && !/^[A-Za-z]:/.test(value) && !posix.isAbsolute(value) && value === posix.normalize(value) && !value.split("/").some((part) => !part || part === "." || part === "..");
 }
 
-async function exists(path: string): Promise<boolean> { try { await lstat(path); return true; } catch { return false; } }
-async function isDirectory(path: string): Promise<boolean> { try { return (await stat(path)).isDirectory(); } catch { return false; } }
+async function exists(path: string): Promise<boolean> {
+  try { await lstat(path); return true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+}
+async function isDirectory(path: string): Promise<boolean> {
+  try { return (await stat(path)).isDirectory(); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+}
 function asObject(value: unknown): ObjectValue { if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("expected object"); return value as ObjectValue; }
 function asString(value: unknown): string { if (typeof value !== "string") throw new Error("expected string"); return value; }
 
@@ -40,6 +46,20 @@ async function walk(directory: string, out: string[]): Promise<void> {
     else if (entry.isFile() && isManifestPath(file)) out.push(file);
   }
 }
+async function taskManifests(tasksDirectory: string): Promise<string[]> {
+  const manifests: string[] = [];
+  if (!await exists(tasksDirectory)) return manifests;
+  for (const task of await readdir(tasksDirectory, { withFileTypes: true })) {
+    if (!task.isDirectory() || task.isSymbolicLink()) continue;
+    const taskDirectory = join(tasksDirectory, task.name);
+    for (const version of await readdir(taskDirectory, { withFileTypes: true })) {
+      if (!version.isDirectory() || version.isSymbolicLink()) continue;
+      const versionDirectory = join(taskDirectory, version.name);
+      for (const name of ["task.json", "task.yaml", "task.yml"]) if (await exists(join(versionDirectory, name))) manifests.push(join(versionDirectory, name));
+    }
+  }
+  return manifests;
+}
 async function canonicalArtifactDirectories(tasksDirectory: string): Promise<string[]> {
   const artifacts: string[] = [];
   if (!await exists(tasksDirectory)) return artifacts;
@@ -55,7 +75,7 @@ async function canonicalArtifactDirectories(tasksDirectory: string): Promise<str
 }
 
 function insideExamples(file: string): boolean { return file.includes(`${sep}spec${sep}examples${sep}`); }
-function manifestOwnedPath(file: string): boolean { const parts = file.split(/[\\/]/); return parts.includes("suites") || parts.includes("experiments"); }
+function manifestOwnedPath(file: string): boolean { const parts = file.replace(/^\.\//, "").split(/[\\/]/); return parts[0] === "suites" || parts[0] === "experiments"; }
 function identity(manifest: Manifest): string | undefined {
   if (["task", "suite", "experiment"].includes(manifest.kind)) return `${asString(manifest.value.id)}@${asString(manifest.value.version)}`;
   if (manifest.kind === "campaign") return asString(manifest.value.campaign_id);
@@ -70,11 +90,12 @@ export async function validateRepository(rootInput: string): Promise<void> {
   const manifests: Manifest[] = [];
   const exampleDirectory = join(root, "spec/examples");
   const exampleFiles = await exists(exampleDirectory) ? (await readdir(exampleDirectory)).filter(isManifestPath).map((name) => join(exampleDirectory, name)) : [];
-  const repoFiles: string[] = [];
-  for (const directory of ["tasks", "suites", "experiments", "results"]) await walk(join(root, directory), repoFiles);
+  const repoFiles = await taskManifests(join(root, "tasks"));
+  for (const directory of ["suites", "experiments", "results"]) await walk(join(root, directory), repoFiles);
   for (const file of [...exampleFiles, ...repoFiles].sort()) {
-    const kind = kindFromPath(file);
-    if (!kind) { if (manifestOwnedPath(file)) diagnostics.push({ file, code: "semantic/unknown-manifest", message: "cannot infer manifest schema kind from a manifest-owned path" }); continue; }
+    const repositoryPath = relative(root, file).split(sep).join("/");
+    const kind = kindFromPath(repositoryPath);
+    if (!kind) { if (manifestOwnedPath(repositoryPath)) diagnostics.push({ file, code: "semantic/unknown-manifest", message: "cannot infer manifest schema kind from a manifest-owned path" }); continue; }
     try { const value = asObject(await loadManifest(file)); schemas.validate(kind, value, file); manifests.push({ file, kind, value }); }
     catch (error) { diagnostics.push(...(error instanceof ValidationError ? error.diagnostics : [{ file, code: "internal", message: error instanceof Error ? error.message : String(error) }])); }
   }
@@ -96,6 +117,8 @@ export async function validateRepository(rootInput: string): Promise<void> {
     taskByIdentity.set(`${id}@${version}`, manifest);
     try {
       const prompt = asObject(manifest.value.prompt), state = asObject(manifest.value.problem_state), source = asObject(state.source), evaluator = asObject(manifest.value.evaluator);
+      const checkIds = (asObject(manifest.value.scoring).checks as unknown[]).map((check) => asString(asObject(check).id));
+      if (new Set(checkIds).size !== checkIds.length) diagnostics.push({ file: manifest.file, code: "semantic/check-ids", message: "task scoring check IDs must be unique" });
       const sourceKind = asString(source.kind);
       const optionalPaths = [typeof source.path === "string" ? source.path : undefined, typeof asObject(manifest.value.calibration ?? {}).evidence_path === "string" ? asString(asObject(manifest.value.calibration ?? {}).evidence_path) : undefined];
       if (sourceKind === "git") for (const patch of (source.patches as unknown[] | undefined) ?? []) optionalPaths.push(asString(asObject(patch).path));
@@ -140,7 +163,7 @@ export async function validateRepository(rootInput: string): Promise<void> {
         try { const path = asString(task.spec_path); if (!safeRelativePath(path) || resolve(root, path) !== resolve(target.file)) diagnostics.push({ file: suite.file, code: "semantic/task-path", message: `task spec_path does not resolve to ${asString(task.id)}@${asString(task.version)}` }); }
         catch { diagnostics.push({ file: suite.file, code: "semantic/task-path", message: `unsafe task spec_path for ${asString(task.id)}@${asString(task.version)}` }); }
         if (suiteStatus === "released" && asString(target.value.status) !== "released") diagnostics.push({ file: suite.file, code: "semantic/released-suite", message: `released suite references non-released task ${asString(task.id)}@${asString(task.version)}` });
-        if (asString(task.spec_digest) !== manifestDigest(target.value)) diagnostics.push({ file: suite.file, code: "semantic/task-digest", message: `task digest mismatch for ${asString(task.id)}@${asString(task.version)}` });
+        if (task.spec_digest !== undefined && asString(task.spec_digest) !== manifestDigest(target.value)) diagnostics.push({ file: suite.file, code: "semantic/task-digest", message: `task digest mismatch for ${asString(task.id)}@${asString(task.version)}` });
       }
     }
   }
@@ -160,7 +183,6 @@ export async function validateRepository(rootInput: string): Promise<void> {
       const expectedIds = (asObject(task.value.scoring).checks as unknown[]).map((check) => asString(asObject(check).id));
       const actualIds = (evaluation.value.checks as unknown[]).map((check) => asString(asObject(check).id));
       const expected = new Set(expectedIds), actual = new Set(actualIds);
-      if (expected.size !== expectedIds.length) diagnostics.push({ file: task.file, code: "semantic/check-ids", message: "task scoring check IDs must be unique" });
       if (actual.size !== actualIds.length || expected.size !== actual.size || [...expected].some((id) => !actual.has(id))) diagnostics.push({ file: evaluation.file, code: "semantic/check-ids", message: "evaluator check IDs must be unique and exactly match task scoring check IDs" });
     }
   }
