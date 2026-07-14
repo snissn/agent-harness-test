@@ -88,6 +88,12 @@ async function semanticFixture(): Promise<{ root: string; taskFile: string; task
   await writeFile(taskFile, JSON.stringify(source)); return { root: fixture, taskFile, task: source };
 }
 
+function setCalibration(task: Record<string, any>, status: "draft" | "released" | "retired", evidenceDigest: string): void {
+  task.status = status;
+  task.calibration.evidence_path = "tasks/demo/1.0.0/calibration.json";
+  task.calibration.evidence_digest = evidenceDigest;
+}
+
 test("repository semantics reject prompt digest, orphan artifacts, unknown evaluator tasks, and duplicate identities", async () => {
   const fixture = await semanticFixture();
   fixture.task.prompt = { ...(fixture.task.prompt as Record<string, unknown>), digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000" }; await writeFile(fixture.taskFile, JSON.stringify(fixture.task));
@@ -116,6 +122,39 @@ test("run-result metric telemetry permits honest partial/unavailable data and re
 test("candidate git sources remain valid without pretending to materialize them", async () => {
   const fixture = await semanticFixture();
   (fixture.task.problem_state as Record<string, unknown>).source = { kind: "git", repository: "https://example.test/demo.git", revision: "a".repeat(40) };
+  await writeFile(fixture.taskFile, JSON.stringify(fixture.task));
+  await validateRepository(fixture.root);
+});
+
+test("released and retired task calibration evidence is verified from its bytes", async () => {
+  const evidence = '{"reference":"passes"}\n';
+  for (const status of ["released", "retired"] as const) {
+    const fixture = await semanticFixture();
+    setCalibration(fixture.task, status, `sha256:${sha256(evidence)}`);
+    await writeFile(join(fixture.root, "tasks/demo/1.0.0/calibration.json"), evidence);
+    await writeFile(fixture.taskFile, JSON.stringify(fixture.task));
+    await validateRepository(fixture.root);
+  }
+});
+
+test("released task calibration evidence must exist", async () => {
+  const fixture = await semanticFixture();
+  setCalibration(fixture.task, "released", `sha256:${sha256("missing")}`);
+  await writeFile(fixture.taskFile, JSON.stringify(fixture.task));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/task-artifact" && item.message.includes("calibration.json")));
+});
+
+test("retired task calibration evidence must match its declared digest", async () => {
+  const fixture = await semanticFixture();
+  setCalibration(fixture.task, "retired", `sha256:${sha256("declared bytes")}`);
+  await writeFile(join(fixture.root, "tasks/demo/1.0.0/calibration.json"), "actual bytes");
+  await writeFile(fixture.taskFile, JSON.stringify(fixture.task));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.message.includes("calibration evidence digest mismatch"));
+});
+
+test("draft task calibration metadata does not require materialized evidence", async () => {
+  const fixture = await semanticFixture();
+  setCalibration(fixture.task, "draft", `sha256:${sha256("not materialized")}`);
   await writeFile(fixture.taskFile, JSON.stringify(fixture.task));
   await validateRepository(fixture.root);
 });

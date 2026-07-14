@@ -133,6 +133,13 @@ export async function validateRepository(rootInput: string): Promise<void> {
         if (promptDigest !== asString(prompt.digest)) throw new Error(`prompt digest mismatch: expected ${asString(prompt.digest)}, got ${promptDigest}`);
         if (!await isDirectory(evaluatorDirectory)) throw new Error("evaluator must be a directory");
         const actualEvaluator = await treeDigest(evaluatorDirectory); if (actualEvaluator !== asString(evaluator.digest)) throw new Error(`evaluator digest mismatch: expected ${asString(evaluator.digest)}, got ${actualEvaluator}`);
+        if ((status === "released" || status === "retired") && manifest.value.calibration !== undefined) {
+          const calibration = asObject(manifest.value.calibration);
+          const evidencePath = asString(calibration.evidence_path);
+          const evidenceFile = await resolveSafe(root, evidencePath);
+          const actualEvidence = `sha256:${sha256(await readFile(evidenceFile))}`;
+          if (actualEvidence !== asString(calibration.evidence_digest)) throw new Error(`calibration evidence digest mismatch for ${evidencePath}: expected ${asString(calibration.evidence_digest)}, got ${actualEvidence}`);
+        }
         if (sourceKind === "directory") {
           if (asString(source.path) !== `${taskRoot}/state`) throw new Error("checked-in directory source must be co-located at tasks/<id>/<version>/state");
           const stateDirectory = await resolveSafe(root, asString(source.path));
