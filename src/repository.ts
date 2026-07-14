@@ -139,17 +139,20 @@ export async function validateRepository(rootInput: string): Promise<void> {
   for (const campaign of repositoryManifests.filter((manifest) => manifest.kind === "campaign")) {
     const campaignDirectory = relative(root, dirname(campaign.file)).split(sep).join("/");
     const campaignId = asString(campaign.value.campaign_id), campaignExperiment = asObject(campaign.value.experiment), campaignSuite = asObject(campaign.value.suite);
+    const referencedRuns: Manifest[] = [];
+    let referencesValid = true;
     for (const item of campaign.value.runs as unknown[]) {
       const reference = asObject(item), runId = asString(reference.run_id), path = asString(reference.path);
       const expectedPath = `runs/${runId}/run.json`;
       if (!safeRelativePath(path) || path !== expectedPath) {
         diagnostics.push({ file: campaign.file, code: "semantic/campaign-run-path", message: `campaign run ${runId} must use canonical path ${expectedPath}` });
+        referencesValid = false;
         continue;
       }
       let target: Manifest | undefined;
       try { target = runResultsByFile.get(await resolveSafe(root, `${campaignDirectory}/${path}`)); }
-      catch (error) { diagnostics.push({ file: campaign.file, code: "semantic/campaign-run-path", message: error instanceof Error ? error.message : String(error) }); continue; }
-      if (!target) { diagnostics.push({ file: campaign.file, code: "semantic/campaign-run-reference", message: `missing run result ${path}` }); continue; }
+      catch (error) { diagnostics.push({ file: campaign.file, code: "semantic/campaign-run-path", message: error instanceof Error ? error.message : String(error) }); referencesValid = false; continue; }
+      if (!target) { diagnostics.push({ file: campaign.file, code: "semantic/campaign-run-reference", message: `missing run result ${path}` }); referencesValid = false; continue; }
       const targetExperiment = asObject(target.value.experiment), targetSuite = asObject(target.value.suite);
       const linked = asString(target.value.run_id) === runId
         && asString(target.value.campaign_id) === campaignId
@@ -157,8 +160,20 @@ export async function validateRepository(rootInput: string): Promise<void> {
         && asString(targetExperiment.version) === asString(campaignExperiment.version)
         && asString(targetSuite.id) === asString(campaignSuite.id)
         && asString(targetSuite.version) === asString(campaignSuite.version);
-      if (!linked) diagnostics.push({ file: campaign.file, code: "semantic/campaign-run-identity", message: `run result identity does not match campaign reference ${runId}` });
-      if (asString(reference.digest) !== manifestDigest(target.value)) diagnostics.push({ file: campaign.file, code: "semantic/campaign-run-digest", message: `run result digest mismatch for ${runId}` });
+      if (!linked) { diagnostics.push({ file: campaign.file, code: "semantic/campaign-run-identity", message: `run result identity does not match campaign reference ${runId}` }); referencesValid = false; }
+      if (asString(reference.digest) !== manifestDigest(target.value)) { diagnostics.push({ file: campaign.file, code: "semantic/campaign-run-digest", message: `run result digest mismatch for ${runId}` }); referencesValid = false; }
+      referencedRuns.push(target);
+    }
+    if (referencesValid) {
+      const summary = asObject(campaign.value.summary);
+      const expectedSummary: Record<string, number> = {
+        recorded_runs: referencedRuns.length,
+        operational_successes: referencedRuns.filter((run) => asObject(run.value.terminal).operational_success === true).length,
+        quality_eligible_runs: referencedRuns.filter((run) => asObject(run.value.evaluation).eligible_for_quality_aggregate === true).length,
+        end_to_end_passes: referencedRuns.filter((run) => asObject(run.value.evaluation).end_to_end_passed === true).length,
+        invalid_runs: referencedRuns.filter((run) => asObject(run.value.evaluation).eligible_for_quality_aggregate === false).length
+      };
+      for (const [name, expected] of Object.entries(expectedSummary)) if (summary[name] !== expected) diagnostics.push({ file: campaign.file, code: "semantic/campaign-summary", message: `campaign summary ${name} must be ${expected}` });
     }
   }
   const taskByIdentity = new Map<string, Manifest>();
@@ -267,6 +282,63 @@ export async function validateRepository(rootInput: string): Promise<void> {
       const expected = new Set(expectedIds), actual = new Set(actualIds);
       if (actual.size !== actualIds.length || expected.size !== actual.size || [...expected].some((id) => !actual.has(id))) diagnostics.push({ file: evaluation.file, code: "semantic/check-ids", message: "evaluator check IDs must be unique and exactly match task scoring check IDs" });
     }
+  }
+  const evaluationsByFile = new Map(repositoryManifests.filter((manifest) => manifest.kind === "evaluation").map((manifest) => [resolve(manifest.file), manifest]));
+  for (const run of repositoryManifests.filter((manifest) => manifest.kind === "run-result")) {
+    const summary = asObject(run.value.evaluation), summaryStatus = asString(summary.status);
+    const evaluation = evaluationsByFile.get(resolve(dirname(run.file), "evaluator.json"));
+    if (!evaluation) {
+      if (summaryStatus === "ok") diagnostics.push({ file: run.file, code: "semantic/run-evaluation-reference", message: "successful run evaluation requires a co-located evaluator.json" });
+      continue;
+    }
+    const taskReference = asObject(run.value.task);
+    const identityMatches = asString(evaluation.value.task_id) === asString(taskReference.id) && asString(evaluation.value.task_version) === asString(taskReference.version);
+    if (!identityMatches) diagnostics.push({ file: run.file, code: "semantic/run-evaluation-identity", message: "evaluator task identity does not match run result" });
+    if (asString(evaluation.value.status) !== summaryStatus) diagnostics.push({ file: run.file, code: "semantic/run-evaluation-status", message: "evaluator status does not match run evaluation status" });
+    if (summaryStatus !== "ok" || asString(evaluation.value.status) !== "ok") continue;
+    if (asString(summary.result_artifact_digest) !== manifestDigest(evaluation.value)) diagnostics.push({ file: run.file, code: "semantic/run-evaluation-digest", message: "run evaluation digest does not match evaluator.json" });
+    if (!identityMatches) continue;
+    const task = taskByIdentity.get(`${asString(evaluation.value.task_id)}@${asString(evaluation.value.task_version)}`);
+    if (!task) continue;
+    const scoring = asObject(task.value.scoring);
+    const evaluatorCheckItems = evaluation.value.checks as unknown[], summaryCheckItems = summary.checks as unknown[];
+    const declaredChecks = new Map((scoring.checks as unknown[]).map((item) => { const check = asObject(item); return [asString(check.id), check]; }));
+    const evaluatorChecks = new Map(evaluatorCheckItems.map((item) => { const check = asObject(item); return [asString(check.id), check]; }));
+    const summaryChecks = new Map(summaryCheckItems.map((item) => { const check = asObject(item); return [asString(check.id), check]; }));
+    const evaluatorComplete = evaluatorChecks.size === evaluatorCheckItems.length
+      && evaluatorChecks.size === declaredChecks.size
+      && [...declaredChecks.keys()].every((id) => evaluatorChecks.has(id));
+    let checksMatch = evaluatorComplete && evaluatorChecks.size === summaryChecks.size && summaryChecks.size === summaryCheckItems.length;
+    for (const [id, evaluatorCheck] of evaluatorChecks) {
+      const summaryCheck = summaryChecks.get(id), declaredCheck = declaredChecks.get(id);
+      if (!summaryCheck || !declaredCheck
+        || summaryCheck.score !== evaluatorCheck.score
+        || summaryCheck.passed !== evaluatorCheck.passed
+        || summaryCheck.message !== evaluatorCheck.message
+        || summaryCheck.weight !== declaredCheck.weight
+        || summaryCheck.required !== declaredCheck.required) checksMatch = false;
+    }
+    if (!checksMatch) diagnostics.push({ file: run.file, code: "semantic/run-evaluation-checks", message: "run evaluation checks do not match evaluator output and task scoring" });
+    if (!evaluatorComplete) continue;
+    const weighted = [...declaredChecks.entries()].reduce((totals, [id, declaredCheck]) => {
+      const evaluatorCheck = evaluatorChecks.get(id);
+      if (!evaluatorCheck) return totals;
+      const weight = declaredCheck.weight as number, score = evaluatorCheck.score as number;
+      return { score: totals.score + weight * score, weight: totals.weight + weight };
+    }, { score: 0, weight: 0 });
+    if (weighted.weight === 0) continue;
+    const artifactQualityScore = weighted.score / weighted.weight;
+    const criteriaPassed = artifactQualityScore >= (scoring.pass_threshold as number)
+      && [...declaredChecks.entries()].every(([id, check]) => check.required !== true || evaluatorChecks.get(id)?.passed === true);
+    const agentCompletionRequired = scoring.require_agent_completion === true;
+    const terminal = asObject(run.value.terminal);
+    const agentCompleted = terminal.reason === "agent_completed" && terminal.attribution === "agent" && terminal.operational_success === true;
+    const endToEndPassed = criteriaPassed && (!agentCompletionRequired || agentCompleted);
+    const derivedMatches = Math.abs((summary.artifact_quality_score as number) - artifactQualityScore) <= 1e-12
+      && summary.criteria_passed === criteriaPassed
+      && summary.agent_completion_required === agentCompletionRequired
+      && summary.end_to_end_passed === endToEndPassed;
+    if (!derivedMatches) diagnostics.push({ file: run.file, code: "semantic/run-evaluation-summary", message: "run evaluation summary does not match evaluator output, task scoring, and terminal state" });
   }
   if (diagnostics.length) throw new ValidationError(diagnostics);
 }

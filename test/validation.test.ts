@@ -131,9 +131,24 @@ async function campaignRunFixture(): Promise<{ root: string; campaign: Record<st
   const result = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/run-result.example.json"), "utf8"));
   const campaignDirectory = join(fixture, "results", campaign.experiment.id, campaign.campaign_id); const runDirectory = join(campaignDirectory, "runs", result.run_id); await mkdir(runDirectory, { recursive: true });
   const campaignFile = join(campaignDirectory, "campaign.json"), resultFile = join(runDirectory, "run.json");
+  result.evaluation = { status: "not-run", reason: "campaign reference fixture", eligible_for_quality_aggregate: false };
+  campaign.planned_run_count = 1;
   campaign.runs = [{ run_id: result.run_id, path: `runs/${result.run_id}/run.json`, digest: manifestDigest(result) }];
+  campaign.summary = { recorded_runs: 1, operational_successes: 1, quality_eligible_runs: 0, end_to_end_passes: 0, invalid_runs: 1 };
   await writeFile(campaignFile, JSON.stringify(campaign)); await writeFile(resultFile, JSON.stringify(result));
   return { root: fixture, campaign, campaignFile, result, resultFile };
+}
+
+async function runEvaluationFixture(): Promise<{ root: string; result: Record<string, any>; resultFile: string; evaluation: Record<string, any>; evaluationFile: string }> {
+  const fixture = await semanticFixture();
+  const task = fixture.task as Record<string, any>;
+  const result = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/run-result.example.json"), "utf8"));
+  const evaluation = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/evaluation.example.json"), "utf8"));
+  result.task.id = "demo"; result.task.spec_path = "tasks/demo/1.0.0/task.json"; result.task.spec_digest = manifestDigest(task); result.task.prompt_digest = task.prompt.digest; result.task.initial_tree_digest = task.problem_state.expected_tree_digest; result.task.evaluator_digest = task.evaluator.digest;
+  evaluation.task_id = "demo"; result.evaluation.result_artifact_digest = manifestDigest(evaluation);
+  const runDirectory = join(fixture.root, "results", result.experiment.id, result.campaign_id, "runs", result.run_id); await mkdir(runDirectory, { recursive: true });
+  const resultFile = join(runDirectory, "run.json"), evaluationFile = join(runDirectory, "evaluator.json"); await writeFile(resultFile, JSON.stringify(result)); await writeFile(evaluationFile, JSON.stringify(evaluation));
+  return { root: fixture.root, result, resultFile, evaluation, evaluationFile };
 }
 
 async function setTaskLifecycle(fixture: { root: string; taskFile: string; task: Record<string, any> }, status: "draft" | "candidate" | "released" | "retired"): Promise<void> {
@@ -357,6 +372,41 @@ test("campaign run references reject stale digests and mutated run results", asy
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/campaign-run-digest"));
   fixture.campaign.runs[0].digest = manifestDigest(fixture.result); await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign)); fixture.result.warnings.push("mutated after campaign finalization"); await writeFile(fixture.resultFile, JSON.stringify(fixture.result));
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/campaign-run-digest"));
+});
+
+test("campaign summaries match every directly derivable referenced-run counter", async () => {
+  const fixture = await campaignRunFixture(); await validateRepository(fixture.root);
+  for (const name of ["recorded_runs", "operational_successes", "quality_eligible_runs", "end_to_end_passes", "invalid_runs"]) {
+    fixture.campaign.summary[name] += 1; await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign));
+    await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/campaign-summary" && item.message.includes(name)));
+    fixture.campaign.summary[name] -= 1;
+  }
+});
+
+test("run evaluation summaries verify their co-located evaluator artifact", async () => {
+  const fixture = await runEvaluationFixture(); await validateRepository(fixture.root);
+  fixture.result.evaluation.result_artifact_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"; await writeFile(fixture.resultFile, JSON.stringify(fixture.result));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-evaluation-digest"));
+  fixture.result.evaluation.result_artifact_digest = manifestDigest(fixture.evaluation); await writeFile(fixture.resultFile, JSON.stringify(fixture.result)); fixture.evaluation.checks[0].details = { mutation: true }; await writeFile(fixture.evaluationFile, JSON.stringify(fixture.evaluation));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-evaluation-digest"));
+});
+
+test("successful run evaluations require their co-located evaluator artifact", async () => {
+  const fixture = await runEvaluationFixture(); await unlink(fixture.evaluationFile);
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-evaluation-reference"));
+});
+
+test("run evaluation checks mirror evaluator scores and pass states", async () => {
+  const fixture = await runEvaluationFixture(); fixture.result.evaluation.checks[0].score = 0; await writeFile(fixture.resultFile, JSON.stringify(fixture.result));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-evaluation-checks"));
+  fixture.result.evaluation.checks[0].score = fixture.evaluation.checks[0].score; fixture.result.evaluation.checks[0].passed = false; await writeFile(fixture.resultFile, JSON.stringify(fixture.result));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-evaluation-checks"));
+});
+
+test("run end-to-end pass state is derived from evaluation, task policy, and terminal state", async () => {
+  const fixture = await runEvaluationFixture(); fixture.evaluation.checks[1].score = 1; fixture.evaluation.checks[1].passed = true; fixture.result.evaluation.result_artifact_digest = manifestDigest(fixture.evaluation); fixture.result.evaluation.checks[1].score = 1; fixture.result.evaluation.checks[1].passed = true; fixture.result.evaluation.artifact_quality_score = 1; fixture.result.evaluation.criteria_passed = true; fixture.result.evaluation.end_to_end_passed = true; await writeFile(fixture.evaluationFile, JSON.stringify(fixture.evaluation)); await writeFile(fixture.resultFile, JSON.stringify(fixture.result)); await validateRepository(fixture.root);
+  fixture.result.terminal.reason = "wall_time_exhausted"; fixture.result.terminal.operational_success = false; await writeFile(fixture.resultFile, JSON.stringify(fixture.result));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-evaluation-summary"));
 });
 
 test("noncanonical result reports are ignored even with exact names or canonical-looking directories", async () => {
