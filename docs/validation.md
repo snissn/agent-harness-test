@@ -11,8 +11,9 @@ npm run validate
 ```
 
 `npm run validate` loads every checked-in JSON/YAML manifest under the repository
-layout plus all structural examples. It rejects duplicate keys, custom YAML tags,
-non-JSON YAML values, unsafe/escaping paths, schema errors, and the implemented
+layout plus all structural examples. It rejects duplicate keys, YAML tags,
+anchors, aliases, merge keys, non-string mapping keys, non-JSON YAML values,
+unsafe/escaping paths, schema errors, and the implemented
 cross-file invariants. Diagnostics use `file [rule] path: message` and exit
 nonzero on any invalid input. Validate one named file structurally with
 `npm run validate:file -- path/to/task.yaml`.

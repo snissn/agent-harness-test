@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
-import { parseDocument } from "yaml";
+import { isMap, isSeq, parseDocument } from "yaml";
 import { createRequire } from "node:module";
 import { Diagnostic, ValidationError } from "./types.js";
 const require = createRequire(import.meta.url);
@@ -21,14 +21,25 @@ function jsonValue(value: unknown, path = "$"): unknown {
   throw new Error(`${path} is not representable as JSON`);
 }
 
+function assertStringMappingKeys(node: unknown): void {
+  if (isMap(node)) {
+    for (const item of node.items) {
+      if (!item.key || typeof (item.key as { value?: unknown }).value !== "string") throw new Error("YAML mapping keys must be strings");
+      assertStringMappingKeys(item.value);
+    }
+  } else if (isSeq(node)) for (const item of node.items) assertStringMappingKeys(item);
+}
+
 export function loadManifestText(text: string, file = "<input>"): unknown {
   try {
     if (file.endsWith(".json")) return jsonValue(parseJson(text, false));
     if (!/\.(ya?ml)$/i.test(file)) throw new Error("manifest must use .json, .yaml, or .yml");
     // Reject explicit tags before conversion; YAML tags have parser-specific semantics.
     if (/(^|[\s\[{,])![A-Za-z!<]/m.test(text)) throw new Error("custom YAML tags are forbidden");
+    if (/(^|[\s\[{,])[&*][A-Za-z0-9_-]+|^\s*<<\s*:/m.test(text)) throw new Error("YAML anchors, aliases, and merge keys are forbidden");
     const document = parseDocument(text, { uniqueKeys: true, merge: false, prettyErrors: false, schema: "core" });
     if (document.errors.length > 0) throw new Error(document.errors.map((error) => error.message).join("; "));
+    assertStringMappingKeys(document.contents);
     return jsonValue(document.toJSON());
   } catch (error) {
     const diagnostic: Diagnostic = { file, code: "load", message: error instanceof Error ? error.message : String(error) };

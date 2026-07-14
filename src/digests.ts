@@ -29,7 +29,7 @@ export async function treeDigest(rootInput: string): Promise<string> {
   const root = resolve(rootInput);
   if ((await lstat(root)).isSymbolicLink()) throw new Error("digest root cannot be a symlink");
   const entries: Entry[] = [];
-  const seen = new Set<string>();
+  const encountered = new Set<string>();
   async function walk(directory: string): Promise<void> {
     const children = await readdir(directory, { withFileTypes: true });
     let included = 0;
@@ -38,8 +38,8 @@ export async function treeDigest(rootInput: string): Promise<string> {
       included += 1;
       const absolute = join(directory, child.name);
       const path = normalizedPath(root, absolute);
-      if (seen.has(path)) throw new Error(`duplicate normalized path: ${path}`);
-      seen.add(path);
+      if (encountered.has(path)) throw new Error(`duplicate normalized path: ${path}`);
+      encountered.add(path);
       const stat = await lstat(absolute);
       if (stat.isDirectory()) await walk(absolute);
       else if (stat.isFile()) entries.push(["file", path, stat.mode & 0o111 ? "executable" : "regular", sha256(await readFile(absolute))]);
@@ -48,10 +48,10 @@ export async function treeDigest(rootInput: string): Promise<string> {
     }
     if (included === 0 && directory !== root) {
       const path = normalizedPath(root, directory);
-      if (!seen.has(path)) { seen.add(path); entries.push(["directory", path]); }
+      entries.push(["directory", path]);
     }
   }
   await walk(root);
-  entries.sort((left, right) => left[1].localeCompare(right[1], "en", { sensitivity: "variant" }));
+  entries.sort((left, right) => left[1] < right[1] ? -1 : left[1] > right[1] ? 1 : 0);
   return `tree-sha256-v1:${sha256(canonicalJson(entries))}`;
 }

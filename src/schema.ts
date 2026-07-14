@@ -1,8 +1,9 @@
 import { readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { createRequire } from "node:module";
-import { Ajv2020, type ErrorObject, type ValidateFunction } from "ajv/dist/2020.js";
+import { Ajv2020, type AnySchema, type ErrorObject, type ValidateFunction } from "ajv/dist/2020.js";
 import { Diagnostic, ValidationError } from "./types.js";
+import { loadManifestText } from "./load.js";
 
 const schemaByKind: Record<string, string> = {
   task: "task.schema.json", suite: "suite.schema.json", experiment: "experiment.schema.json", campaign: "campaign.schema.json",
@@ -13,6 +14,11 @@ const addFormats = require("ajv-formats") as (validator: Ajv2020) => void;
 
 export function kindFromPath(file: string): string | undefined {
   const name = basename(file);
+  const exampleKinds: Record<string, string> = {
+    "task.example.json": "task", "suite.example.json": "suite", "experiment.example.json": "experiment",
+    "campaign.example.json": "campaign", "evaluation.example.json": "evaluation", "run-request.example.json": "run-request", "run-result.example.json": "run-result"
+  };
+  if (exampleKinds[name]) return exampleKinds[name];
   if (name === "task.yaml" || name === "task.yml" || name === "task.json") return "task";
   if (name === "evaluator.json") return "evaluation";
   if (name === "run-request.json") return "run-request";
@@ -31,7 +37,7 @@ export class SchemaValidator {
     const ajv = new Ajv2020({ allErrors: true, strict: true, validateFormats: true });
     addFormats(ajv);
     for (const name of (await readdir(schemaDirectory)).filter((file) => file.endsWith(".json")).sort()) {
-      ajv.addSchema(JSON.parse(await readFile(join(schemaDirectory, name), "utf8")));
+      ajv.addSchema(loadManifestText(await readFile(join(schemaDirectory, name), "utf8"), join(schemaDirectory, name)) as AnySchema);
     }
     for (const [kind, filename] of Object.entries(schemaByKind)) {
       const compiled = ajv.getSchema(filename);
