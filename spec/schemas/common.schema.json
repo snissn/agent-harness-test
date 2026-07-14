@@ -1,0 +1,346 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent Harness Test common definitions",
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "treeDigest": {
+      "type": "string",
+      "pattern": "^tree-sha256-v1:[a-f0-9]{64}$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    },
+    "command": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    },
+    "extensions": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "hardLimit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "enforcement"
+      ],
+      "properties": {
+        "value": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "enforcement": {
+          "const": "hard"
+        }
+      }
+    },
+    "optionalLimit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "enforcement"
+      ],
+      "properties": {
+        "value": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "enforcement": {
+          "enum": [
+            "hard",
+            "soft",
+            "observe-only"
+          ]
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "wall_time_seconds"
+      ],
+      "properties": {
+        "wall_time_seconds": {
+          "$ref": "#/$defs/hardLimit"
+        },
+        "total_tokens": {
+          "$ref": "#/$defs/optionalLimit"
+        },
+        "tool_calls": {
+          "$ref": "#/$defs/optionalLimit"
+        }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "enabled",
+            "disabled",
+            "restricted"
+          ]
+        },
+        "allow_domains": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "allow_methods": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "GET",
+              "HEAD",
+              "OPTIONS",
+              "POST",
+              "PUT",
+              "PATCH",
+              "DELETE"
+            ]
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "restricted"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "allow_domains": true,
+              "allow_methods": true
+            },
+            "required": [
+              "allow_domains",
+              "allow_methods"
+            ]
+          }
+        }
+      ]
+    },
+    "taskReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "spec_path"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "version": {
+          "$ref": "#/$defs/semver"
+        },
+        "spec_path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "spec_digest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "suiteReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "spec_path",
+        "spec_digest"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "version": {
+          "$ref": "#/$defs/semver"
+        },
+        "spec_path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "spec_digest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "harness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "interface",
+        "adapter_id",
+        "adapter_version",
+        "runtime_version",
+        "config"
+      ],
+      "properties": {
+        "family": {
+          "$ref": "#/$defs/identifier"
+        },
+        "interface": {
+          "$ref": "#/$defs/identifier"
+        },
+        "adapter_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "adapter_version": {
+          "$ref": "#/$defs/semver"
+        },
+        "runtime_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "config": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "requested_id"
+      ],
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/identifier"
+        },
+        "requested_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expected_snapshot_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "effort": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "display_label",
+        "native_value"
+      ],
+      "properties": {
+        "display_label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "native_value": true
+      }
+    },
+    "agentConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "harness",
+        "model",
+        "effort",
+        "limits"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "harness": {
+          "$ref": "#/$defs/harness"
+        },
+        "model": {
+          "$ref": "#/$defs/model"
+        },
+        "effort": {
+          "$ref": "#/$defs/effort"
+        },
+        "limits": {
+          "$ref": "#/$defs/limits"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensions"
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "path",
+        "digest"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "request",
+            "run-result",
+            "native-events",
+            "normalized-events",
+            "stdout",
+            "stderr",
+            "final-message",
+            "workspace-patch",
+            "workspace-tree",
+            "evaluator-result",
+            "other"
+          ]
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

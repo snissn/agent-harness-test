@@ -1,0 +1,51 @@
+{
+  "schema_version": "0.1.0",
+  "campaign_id": "2026-07-14t180000z-codex-effort-smoke",
+  "experiment": {
+    "id": "codex-effort-smoke",
+    "version": "1.0.0",
+    "spec_path": "experiments/codex-effort-smoke/1.0.0.yaml",
+    "spec_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+  },
+  "suite": {
+    "id": "demo-breadth",
+    "version": "1.0.0",
+    "spec_path": "suites/demo-breadth/1.0.0.yaml",
+    "spec_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+  },
+  "mode": "smoke",
+  "observed_at": "2026-07-14T18:00:00Z",
+  "started_at": "2026-07-14T18:00:00Z",
+  "finished_at": "2026-07-14T18:02:00Z",
+  "status": "completed",
+  "runner": {
+    "version": "0.1.0",
+    "git_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "planned_run_count": 2,
+  "runs": [
+    {
+      "run_id": "01J00000000000000000000000",
+      "path": "runs/01J00000000000000000000000/run.json",
+      "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    {
+      "run_id": "01J00000000000000000000001",
+      "path": "runs/01J00000000000000000000001/run.json",
+      "digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    }
+  ],
+  "summary": {
+    "recorded_runs": 2,
+    "operational_successes": 2,
+    "quality_eligible_runs": 2,
+    "end_to_end_passes": 1,
+    "invalid_runs": 0
+  },
+  "labels": {
+    "purpose": "structural-example"
+  },
+  "warnings": [
+    "Smoke evidence uses one repetition per matrix cell."
+  ]
+}

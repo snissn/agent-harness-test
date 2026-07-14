@@ -1,0 +1,107 @@
+{
+  "schema_version": "0.1.0",
+  "id": "example-cli",
+  "version": "1.0.0",
+  "status": "released",
+  "title": "Complete a small command-line tool",
+  "summary": "Implement the missing behavior and preserve the documented CLI contract.",
+  "category": "feature",
+  "tags": [
+    "cli",
+    "parsing"
+  ],
+  "languages": [
+    "Python"
+  ],
+  "prompt": {
+    "path": "tasks/example-cli/1.0.0/prompt.md",
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "problem_state": {
+    "source": {
+      "kind": "directory",
+      "path": "tasks/example-cli/1.0.0/state"
+    },
+    "digest_algorithm": "tree-sha256-v1",
+    "expected_tree_digest": "tree-sha256-v1:1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "environment": {
+    "runtime": {
+      "kind": "oci",
+      "image": "python:3.13-slim",
+      "image_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "platform": "linux/amd64"
+    },
+    "network": {
+      "mode": "enabled"
+    },
+    "workspace_directory": "/workspace",
+    "setup_commands": [
+      [
+        "python",
+        "-m",
+        "pip",
+        "install",
+        "-e",
+        "."
+      ]
+    ],
+    "variables": {
+      "PYTHONDONTWRITEBYTECODE": "1"
+    },
+    "secret_names": []
+  },
+  "evaluator": {
+    "path": "tasks/example-cli/1.0.0/evaluator",
+    "command": [
+      "python",
+      "/evaluator/evaluate.py",
+      "/workspace"
+    ],
+    "timeout_seconds": 120,
+    "result_file": "evaluator.json",
+    "digest": "tree-sha256-v1:3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "scoring": {
+    "checks": [
+      {
+        "id": "core-behavior",
+        "description": "Required CLI behaviors produce the expected output.",
+        "weight": 0.7,
+        "required": true,
+        "agent_visible": true
+      },
+      {
+        "id": "edge-cases",
+        "description": "The implementation handles benchmark edge cases.",
+        "weight": 0.3,
+        "required": false,
+        "agent_visible": false
+      }
+    ],
+    "pass_threshold": 0.9,
+    "require_agent_completion": true
+  },
+  "default_limits": {
+    "wall_time_seconds": {
+      "value": 1200,
+      "enforcement": "hard"
+    },
+    "total_tokens": {
+      "value": 200000,
+      "enforcement": "observe-only"
+    },
+    "tool_calls": {
+      "value": 200,
+      "enforcement": "observe-only"
+    }
+  },
+  "calibration": {
+    "evidence_path": "tasks/example-cli/1.0.0/calibration.json",
+    "evidence_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+    "reference_passes": true,
+    "untouched_fails": true,
+    "partial_solution_checked": true,
+    "deterministic_runs": 3
+  }
+}

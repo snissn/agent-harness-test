@@ -1,0 +1,192 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent Harness Test finalized campaign record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "experiment",
+    "suite",
+    "mode",
+    "observed_at",
+    "started_at",
+    "finished_at",
+    "status",
+    "runner",
+    "planned_run_count",
+    "runs",
+    "summary",
+    "labels",
+    "warnings"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "campaign_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "experiment": {
+      "$ref": "#/$defs/experimentReference"
+    },
+    "suite": {
+      "$ref": "common.schema.json#/$defs/suiteReference"
+    },
+    "mode": {
+      "enum": [
+        "smoke",
+        "benchmark"
+      ]
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finished_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "enum": [
+        "completed",
+        "partial",
+        "cancelled",
+        "failed"
+      ]
+    },
+    "runner": {
+      "$ref": "#/$defs/runner"
+    },
+    "planned_run_count": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "runs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/runReference"
+      }
+    },
+    "summary": {
+      "$ref": "#/$defs/summary"
+    },
+    "labels": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "extensions": {
+      "$ref": "common.schema.json#/$defs/extensions"
+    }
+  },
+  "$defs": {
+    "experimentReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "spec_path",
+        "spec_digest"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "common.schema.json#/$defs/identifier"
+        },
+        "version": {
+          "$ref": "common.schema.json#/$defs/semver"
+        },
+        "spec_path": {
+          "$ref": "common.schema.json#/$defs/relativePath"
+        },
+        "spec_digest": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        }
+      }
+    },
+    "runner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "git_commit"
+      ],
+      "properties": {
+        "version": {
+          "$ref": "common.schema.json#/$defs/semver"
+        },
+        "git_commit": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{7,64}$"
+        }
+      }
+    },
+    "runReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "path",
+        "digest"
+      ],
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "$ref": "common.schema.json#/$defs/relativePath"
+        },
+        "digest": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recorded_runs",
+        "operational_successes",
+        "quality_eligible_runs",
+        "end_to_end_passes",
+        "invalid_runs"
+      ],
+      "properties": {
+        "recorded_runs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "operational_successes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "quality_eligible_runs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end_to_end_passes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "invalid_runs": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

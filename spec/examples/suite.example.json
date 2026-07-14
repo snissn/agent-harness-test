@@ -1,0 +1,18 @@
+{
+  "schema_version": "0.1.0",
+  "id": "demo-breadth",
+  "version": "1.0.0",
+  "status": "released",
+  "title": "Demo breadth suite",
+  "description": "A small suite used to exercise the end-to-end evaluation pipeline.",
+  "tasks": [
+    {
+      "id": "example-cli",
+      "version": "1.0.0",
+      "spec_path": "tasks/example-cli/1.0.0/task.yaml",
+      "spec_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+      "weight": 1,
+      "anchor": true
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "schema_version": "0.1.0",
+  "task_id": "example-cli",
+  "task_version": "1.0.0",
+  "status": "ok",
+  "started_at": "2026-07-14T18:00:30Z",
+  "finished_at": "2026-07-14T18:00:32Z",
+  "duration_ms": 2000,
+  "checks": [
+    {
+      "id": "core-behavior",
+      "score": 1,
+      "passed": true,
+      "message": "All required behavior tests passed."
+    },
+    {
+      "id": "edge-cases",
+      "score": 0.5,
+      "passed": false,
+      "message": "One of two edge-case groups passed."
+    }
+  ]
+}

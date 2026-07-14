@@ -1,0 +1,118 @@
+{
+  "schema_version": "0.1.0",
+  "id": "codex-effort-smoke",
+  "version": "1.0.0",
+  "title": "Codex effort smoke campaign",
+  "description": "Compare two native Codex effort settings on the same model and suite.",
+  "mode": "smoke",
+  "suite": {
+    "id": "demo-breadth",
+    "version": "1.0.0",
+    "spec_path": "suites/demo-breadth/1.0.0.yaml",
+    "spec_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+  },
+  "repetitions": 1,
+  "ordering": {
+    "mode": "listed"
+  },
+  "configurations": [
+    {
+      "id": "codex-medium",
+      "harness": {
+        "family": "codex",
+        "interface": "cli-exec",
+        "adapter_id": "codex-cli",
+        "adapter_version": "0.1.0",
+        "runtime_version": "0.145.0-alpha.11",
+        "config": {
+          "sandbox": "workspace-write",
+          "network": "task-policy",
+          "user_config": "ignored"
+        }
+      },
+      "model": {
+        "provider": "openai",
+        "requested_id": "gpt-5.6-sol"
+      },
+      "effort": {
+        "display_label": "medium",
+        "native_value": "medium"
+      },
+      "limits": {
+        "wall_time_seconds": {
+          "value": 1200,
+          "enforcement": "hard"
+        },
+        "total_tokens": {
+          "value": 200000,
+          "enforcement": "observe-only"
+        }
+      }
+    },
+    {
+      "id": "codex-high",
+      "harness": {
+        "family": "codex",
+        "interface": "cli-exec",
+        "adapter_id": "codex-cli",
+        "adapter_version": "0.1.0",
+        "runtime_version": "0.145.0-alpha.11",
+        "config": {
+          "sandbox": "workspace-write",
+          "network": "task-policy",
+          "user_config": "ignored"
+        }
+      },
+      "model": {
+        "provider": "openai",
+        "requested_id": "gpt-5.6-sol"
+      },
+      "effort": {
+        "display_label": "high",
+        "native_value": "high"
+      },
+      "limits": {
+        "wall_time_seconds": {
+          "value": 1200,
+          "enforcement": "hard"
+        },
+        "total_tokens": {
+          "value": 200000,
+          "enforcement": "observe-only"
+        }
+      }
+    }
+  ],
+  "reporting": {
+    "cuts": [
+      "configuration",
+      "model",
+      "effort",
+      "observed-at",
+      "task",
+      "category",
+      "language"
+    ],
+    "comparisons": [
+      {
+        "id": "effort-comparison",
+        "baseline_configuration_id": "codex-medium",
+        "candidate_configuration_ids": [
+          "codex-high"
+        ],
+        "gates": [
+          {
+            "metric": "headline-score-delta",
+            "operator": ">=",
+            "threshold": 0,
+            "scope": "suite",
+            "informational": true
+          }
+        ]
+      }
+    ]
+  },
+  "labels": {
+    "purpose": "structural-example"
+  }
+}
