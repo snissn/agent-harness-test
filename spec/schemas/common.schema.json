@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "common.schema.json",
   "title": "Agent Harness Test common definitions",
   "$defs": {
     "identifier": {
@@ -340,6 +341,428 @@
           "type": "integer",
           "minimum": 0
         }
+      }
+    },
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "number",
+        "mode",
+        "initiated_by"
+      ],
+      "properties": {
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "mode": {
+          "enum": [
+            "initial",
+            "retry",
+            "resume"
+          ]
+        },
+        "initiated_by": {
+          "enum": [
+            "runner",
+            "operator"
+          ]
+        },
+        "parent_run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "initial"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "properties": {
+              "number": {
+                "const": 1
+              },
+              "parent_run_id": false
+            }
+          },
+          "else": {
+            "properties": {
+              "number": {
+                "type": "integer",
+                "minimum": 2
+              },
+              "parent_run_id": true,
+              "reason": true
+            },
+            "required": [
+              "parent_run_id",
+              "reason"
+            ]
+          }
+        }
+      ]
+    },
+    "executionTopology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "isolation",
+        "canonical",
+        "credential_protection",
+        "environment_digest",
+        "operating_system",
+        "architecture"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "host",
+            "container",
+            "virtual-machine"
+          ]
+        },
+        "isolation": {
+          "enum": [
+            "none",
+            "harness-sandbox",
+            "outer-sandbox",
+            "combined"
+          ]
+        },
+        "canonical": {
+          "type": "boolean"
+        },
+        "credential_protection": {
+          "enum": [
+            "harness-sandbox",
+            "brokered",
+            "short-lived",
+            "unprotected"
+          ]
+        },
+        "environment_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "operating_system": {
+          "type": "string",
+          "minLength": 1
+        },
+        "architecture": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtime_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtime_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "image_digest": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "canonical": {
+                "const": true
+              }
+            },
+            "required": [
+              "canonical"
+            ]
+          },
+          "then": {
+            "properties": {
+              "mode": {
+                "enum": [
+                  "container",
+                  "virtual-machine"
+                ]
+              },
+              "isolation": {
+                "enum": [
+                  "outer-sandbox",
+                  "combined"
+                ]
+              },
+              "credential_protection": {
+                "enum": [
+                  "harness-sandbox",
+                  "brokered",
+                  "short-lived"
+                ]
+              },
+              "runtime_name": true,
+              "runtime_version": true,
+              "image_digest": true
+            },
+            "required": [
+              "runtime_name",
+              "runtime_version",
+              "image_digest"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "host"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "properties": {
+              "isolation": {
+                "const": "harness-sandbox"
+              },
+              "canonical": {
+                "const": false
+              },
+              "credential_protection": {
+                "enum": [
+                  "harness-sandbox",
+                  "brokered",
+                  "short-lived"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "sanitizedEnvironmentEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "classification",
+        "source"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Z_][A-Z0-9_]*$"
+        },
+        "classification": {
+          "enum": [
+            "public",
+            "redacted",
+            "unset"
+          ]
+        },
+        "source": {
+          "enum": [
+            "runner",
+            "task",
+            "harness",
+            "secret-store",
+            "host"
+          ]
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "classification": {
+                "const": "public"
+              }
+            },
+            "required": [
+              "classification"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": true
+            },
+            "required": [
+              "value"
+            ]
+          },
+          "else": {
+            "properties": {
+              "value": false
+            }
+          }
+        }
+      ]
+    },
+    "hostFingerprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operating_system",
+        "architecture"
+      ],
+      "properties": {
+        "operating_system": {
+          "type": "string",
+          "minLength": 1
+        },
+        "architecture": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kernel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cpu_model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "logical_processor_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "total_memory_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "locale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timezone": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "runnerRuntime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "errorRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "occurred_at",
+        "phase",
+        "code",
+        "attribution",
+        "retryable",
+        "message"
+      ],
+      "properties": {
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "phase": {
+          "enum": [
+            "campaign-preflight",
+            "resolution",
+            "request-finalization",
+            "materialization",
+            "setup",
+            "harness-startup",
+            "agent",
+            "snapshot",
+            "evaluation",
+            "finalization",
+            "indexing",
+            "reporting",
+            "operator"
+          ]
+        },
+        "code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]*$"
+        },
+        "attribution": {
+          "enum": [
+            "agent",
+            "provider",
+            "harness",
+            "environment",
+            "evaluator",
+            "runner",
+            "operator"
+          ]
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cause_code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]*$"
+        },
+        "external_request_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "signal": {
+          "type": "string",
+          "minLength": 1
+        },
+        "artifact_path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "artifact_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "details": {
+          "$ref": "#/$defs/extensions"
+        }
+      },
+      "dependentRequired": {
+        "artifact_path": [
+          "artifact_digest"
+        ],
+        "artifact_digest": [
+          "artifact_path"
+        ]
       }
     }
   }

@@ -1,0 +1,330 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "run-request.schema.json",
+  "title": "Agent Harness Test resolved run request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "campaign_id",
+    "created_at",
+    "experiment",
+    "suite",
+    "task",
+    "repetition",
+    "schedule_index",
+    "attempt",
+    "workspace",
+    "configuration",
+    "execution",
+    "network",
+    "invocation",
+    "artifact_targets"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.2.0"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "campaign_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "experiment": {
+      "$ref": "#/$defs/experimentReference"
+    },
+    "suite": {
+      "$ref": "common.schema.json#/$defs/suiteReference"
+    },
+    "task": {
+      "$ref": "#/$defs/runTaskReference"
+    },
+    "repetition": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "schedule_index": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "attempt": {
+      "$ref": "common.schema.json#/$defs/attempt"
+    },
+    "workspace": {
+      "$ref": "#/$defs/workspace"
+    },
+    "configuration": {
+      "$ref": "common.schema.json#/$defs/agentConfiguration"
+    },
+    "execution": {
+      "$ref": "common.schema.json#/$defs/executionTopology"
+    },
+    "network": {
+      "$ref": "common.schema.json#/$defs/networkPolicy"
+    },
+    "invocation": {
+      "$ref": "#/$defs/invocation"
+    },
+    "artifact_targets": {
+      "$ref": "#/$defs/artifactTargets"
+    },
+    "extensions": {
+      "$ref": "common.schema.json#/$defs/extensions"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "invocation": {
+            "type": "object",
+            "properties": {
+              "full_access": {
+                "const": true
+              }
+            },
+            "required": [
+              "full_access"
+            ]
+          }
+        },
+        "required": [
+          "invocation"
+        ]
+      },
+      "then": {
+        "properties": {
+          "execution": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "enum": [
+                  "container",
+                  "virtual-machine"
+                ]
+              },
+              "isolation": {
+                "const": "outer-sandbox"
+              },
+              "canonical": {
+                "const": true
+              },
+              "credential_protection": {
+                "enum": [
+                  "brokered",
+                  "short-lived"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "experimentReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "spec_path",
+        "spec_digest"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "common.schema.json#/$defs/identifier"
+        },
+        "version": {
+          "$ref": "common.schema.json#/$defs/semver"
+        },
+        "spec_path": {
+          "$ref": "common.schema.json#/$defs/relativePath"
+        },
+        "spec_digest": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        }
+      }
+    },
+    "runTaskReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "spec_path",
+        "spec_digest",
+        "prompt_digest",
+        "initial_tree_digest",
+        "evaluator_digest"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "common.schema.json#/$defs/identifier"
+        },
+        "version": {
+          "$ref": "common.schema.json#/$defs/semver"
+        },
+        "spec_path": {
+          "$ref": "common.schema.json#/$defs/relativePath"
+        },
+        "spec_digest": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "prompt_digest": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "initial_tree_digest": {
+          "$ref": "common.schema.json#/$defs/treeDigest"
+        },
+        "evaluator_digest": {
+          "$ref": "common.schema.json#/$defs/treeDigest"
+        }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "prompt_path",
+        "prompt_digest",
+        "initial_tree_digest"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prompt_path": {
+          "$ref": "common.schema.json#/$defs/relativePath"
+        },
+        "prompt_digest": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "initial_tree_digest": {
+          "$ref": "common.schema.json#/$defs/treeDigest"
+        }
+      }
+    },
+    "invocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runtime_source",
+        "requested_runtime",
+        "resolved_runtime_version",
+        "runtime_digest",
+        "executable_digest",
+        "argv",
+        "working_directory",
+        "stdin_digest",
+        "environment",
+        "secret_names",
+        "full_access"
+      ],
+      "properties": {
+        "runtime_source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requested_runtime": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resolved_runtime_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtime_digest": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "executable_digest": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "argv": {
+          "$ref": "common.schema.json#/$defs/command"
+        },
+        "working_directory": {
+          "type": "string",
+          "minLength": 1
+        },
+        "stdin_digest": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "environment": {
+          "type": "array",
+          "items": {
+            "$ref": "common.schema.json#/$defs/sanitizedEnvironmentEntry"
+          }
+        },
+        "secret_names": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Z_][A-Z0-9_]*$"
+          }
+        },
+        "full_access": {
+          "type": "boolean"
+        }
+      }
+    },
+    "artifactTargets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request",
+        "run_result",
+        "native_events",
+        "stdout",
+        "stderr",
+        "final_message",
+        "workspace_patch",
+        "workspace_tree",
+        "evaluator_result"
+      ],
+      "properties": {
+        "request": {
+          "$ref": "common.schema.json#/$defs/relativePath"
+        },
+        "run_result": {
+          "$ref": "common.schema.json#/$defs/relativePath"
+        },
+        "native_events": {
+          "$ref": "common.schema.json#/$defs/relativePath"
+        },
+        "normalized_events": {
+          "$ref": "common.schema.json#/$defs/relativePath"
+        },
+        "stdout": {
+          "$ref": "common.schema.json#/$defs/relativePath"
+        },
+        "stderr": {
+          "$ref": "common.schema.json#/$defs/relativePath"
+        },
+        "final_message": {
+          "$ref": "common.schema.json#/$defs/relativePath"
+        },
+        "workspace_patch": {
+          "$ref": "common.schema.json#/$defs/relativePath"
+        },
+        "workspace_tree": {
+          "$ref": "common.schema.json#/$defs/relativePath"
+        },
+        "evaluator_result": {
+          "$ref": "common.schema.json#/$defs/relativePath"
+        }
+      }
+    }
+  }
+}

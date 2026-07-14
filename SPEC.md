@@ -1,6 +1,6 @@
 # Agent Harness Test Framework Specification
 
-Version: `0.1.0-draft`
+Version: `0.2.0-draft`
 
 Status: normative design draft
 
@@ -46,11 +46,15 @@ The first implementation targets:
 
 - local, non-interactive `codex exec` execution;
 - ChatGPT-authenticated models available through that Codex installation;
+- a deterministic, non-agent runner with an explicit run state machine;
 - public tasks and evaluators;
 - ordinary network access during agent execution;
 - one smoke attempt per matrix cell while the system is being stabilized;
-- a breadth-first suite spanning Python, TypeScript, and Go; and
-- local immutable artifacts, a rebuildable SQLite index, and static reports.
+- a breadth-first suite spanning Python, TypeScript, and Go;
+- local immutable artifacts, a rebuildable SQLite index, and static reports;
+- a non-canonical local-development execution profile; and
+- a canonical profile isolated from the host by an ephemeral Linux container or
+  virtual machine.
 
 ### 2.3 Non-goals for v0
 
@@ -66,7 +70,7 @@ The following are explicitly deferred:
 
 ## 3. System model
 
-The system has five durable layers:
+The system has six durable layers:
 
 ```text
 TaskSpec + SuiteSpec
@@ -75,7 +79,10 @@ TaskSpec + SuiteSpec
 Materialized problem state + isolated evaluator
         |
         v
-ExperimentSpec with explicit agent configurations
+ExperimentSpec + campaign preflight
+        |
+        v
+Deterministic runner -> immutable ResolvedRunRequest
         |
         v
 Harness adapter -> agent workspace -> immutable run artifacts
@@ -123,9 +130,9 @@ results/
 ```
 
 JSON and YAML manifests MAY both be accepted. They MUST validate against the
-same JSON Schemas and normalize to the same JSON data model. Repository paths in
-manifests use `/` separators and are relative to the repository root unless a
-field explicitly says otherwise.
+same JSON Schemas and normalize to the same JSON data model. Readers MUST reject
+duplicate object keys. Repository paths in manifests use `/` separators and are
+relative to the repository root unless a field explicitly says otherwise.
 
 YAML readers MUST reject duplicate mapping keys, non-string mapping keys,
 custom tags, and values that cannot be represented by the JSON data model. This
@@ -319,6 +326,20 @@ network capabilities. Harness-native tools and system instructions remain
 intact because the evaluated unit is the production agent system, not a bare
 model.
 
+The execution topology is part of run provenance. Local host runs use the
+harness sandbox and MUST be marked non-canonical. Canonical runs MUST place the
+harness and task workspace inside an ephemeral Linux container or virtual
+machine with bounded resources and no unrelated host mounts or credentials.
+Using both outer isolation and a harness-native sandbox is allowed and MUST be
+recorded.
+
+Model credentials belong to the control plane. A canonical runner MUST NOT make
+long-lived model credentials readable from the agent workspace or from commands
+the agent can execute. If a harness cannot invoke the model without exposing a
+credential file or environment value to an unrestricted agent process, that
+process MUST retain a sandbox that protects the credential. Full-access mode is
+not permitted merely because the task and evaluator are public.
+
 ## 10. Evaluator contract
 
 The evaluator is trusted benchmark code that runs after agent execution. It is
@@ -407,8 +428,8 @@ One number MUST NOT erase the component metrics.
 - Incorrect completed work is scorable and may receive any evaluator score.
 - Timeout, token exhaustion, tool exhaustion, or agent-declared failure remains
   scorable if evaluation succeeds.
-- Provider, harness, environment, evaluator, and operator failures are excluded
-  from the quality-score denominator and reported separately.
+- Provider, harness, environment, evaluator, runner, and operator failures are
+  excluded from the quality-score denominator and reported separately.
 - Operational reports MUST still count those failures so an unreliable system
   cannot appear healthy through exclusion alone.
 
@@ -441,6 +462,14 @@ The experiment structure is defined in
 - run ordering and random seed;
 - default limits and allowed per-configuration overrides; and
 - requested report comparisons.
+
+Before scheduling attempts, campaign preflight MUST resolve and fingerprint the
+runner runtime and every harness runtime. It records whether each runtime was
+preinstalled, found in a cache, or installed. This work is campaign provenance,
+not agent execution time. Preflight, scheduling, indexing, and reporting errors
+are retained as structured campaign errors even when no run can be created.
+The runtime digest identifies the resolved package or installation tree; the
+executable digest identifies the exact entry point invoked from that runtime.
 
 ### 13.1 Explicit configurations
 
@@ -481,7 +510,8 @@ Historical comparisons are valid without qualification only when they use:
 - the same task and suite versions;
 - matching problem-state, prompt, evaluator, and environment digests;
 - the same harness family and interface;
-- known harness and adapter versions; and
+- known harness and adapter versions;
+- a matching canonical execution topology and environment; and
 - the same requested model identity and native effort configuration.
 
 When a provider exposes a resolved model snapshot, the runner MUST record it.
@@ -493,7 +523,53 @@ Cross-suite reports MUST use an explicitly labeled common anchor subset or show
 the suite versions as separate series. They MUST NOT connect incompatible
 headline scores as though the benchmark were unchanged.
 
-## 15. Harness adapter contract
+## 15. Deterministic control plane and runner
+
+The authoritative runner MUST be ordinary deterministic program code. A model
+or coding agent MUST NOT own experiment expansion, run ordering, retry policy,
+limit enforcement, terminal classification, artifact finalization, evaluation,
+scoring, or report aggregation. Using an agent for those decisions would add an
+uncontrolled model-harness system to the benchmark control plane.
+
+The runner SHOULD expose a small typed command surface equivalent to:
+
+```text
+validate -> materialize -> run -> evaluate -> index -> report
+```
+
+The implementation MAY be launched through a script, but durable behavior MUST
+live in testable program modules rather than ad hoc shell orchestration. Each
+state transition MUST be determined by validated inputs and recorded state.
+Operations SHOULD be idempotent and resumable; an interrupted run MUST never
+silently overwrite a finalized artifact.
+
+An optional operator agent MAY select an already-defined experiment, invoke the
+deterministic runner, summarize results, or investigate failures. Its prompts,
+commands, and interventions MUST be recorded when they affect execution. It
+MUST NOT calculate authoritative scores, change evaluator output, mutate
+finalized source artifacts, or make an unrecorded retry or exclusion decision.
+
+Every attempt receives a distinct run ID. A retry or resume records its parent
+run, attempt number, initiator, and reason. Retries never replace the original
+attempt and are not silently substituted into aggregates. V0 performs no
+automatic retries. Operator-initiated retries and resumes are diagnostic runs
+and are excluded from headline quality aggregates unless a future experiment
+schema defines an explicit selection policy.
+
+Before materialization, the runner MUST finalize a resolved request conforming
+to [run-request.schema.json](spec/schemas/run-request.schema.json). The request
+records the exact task and experiment inputs, resolved harness configuration,
+execution topology, sanitized environment, exact argv, stdin digest, limits,
+and scheduling coordinates. Secret values MUST NOT appear in the request;
+declared secret names and redacted placeholders are sufficient.
+
+The runner, rather than the harness adapter, asserts and verifies execution
+topology. Semantic validation MUST reject disagreement between invocation flags
+and normalized fields—for example, a bypass-sandbox argv with
+`full_access = false`, or a runtime version that differs from campaign
+preflight.
+
+## 16. Harness adapter contract
 
 Each adapter accepts a resolved run request containing:
 
@@ -518,8 +594,9 @@ Each adapter returns or records:
 - the final workspace without cleaning agent changes.
 
 Adapters MUST preserve raw native events even when normalized events are also
-produced. Missing metrics remain absent or explicitly unavailable; adapters MUST
-NOT fabricate cross-harness equivalents.
+produced. A normalized metric that the harness cannot provide is marked
+`unavailable` with a reason; adapters MUST NOT fabricate cross-harness
+equivalents.
 
 Recorded effective configuration MUST contain no authentication material or
 secret values. Secret names and redacted placeholders may be recorded when they
@@ -529,7 +606,13 @@ The harness's native system instructions and ordinary tools SHOULD remain
 unchanged. Personal user configuration, memories, undeclared MCP servers,
 plugins, and skills MUST be excluded from canonical campaigns.
 
-## 16. Initial Codex CLI adapter
+Harness runtime versions in benchmark experiments MUST be immutable exact
+versions. Mutable channels such as `latest` or `alpha` MAY be used during local
+development only if campaign preflight resolves them to an exact version before
+creating run requests. Package download, installation, and cache warming happen
+before the timed run and are recorded as campaign preflight, not agent time.
+
+## 17. Initial Codex CLI adapter
 
 The initial adapter identity is:
 
@@ -549,7 +632,7 @@ codex exec
   --strict-config
   --sandbox workspace-write
   --model <requested-model>
-  -c approval_policy="never"
+  --ask-for-approval never
   -c model_reasoning_effort="<native-effort>"
   -c sandbox_workspace_write.network_access=true
   -C <workspace>
@@ -563,6 +646,20 @@ task policy rather than always using `true`.
 Canonical runs use a controlled `CODEX_HOME` for authentication while excluding
 personal configuration and extensions. The exact CLI version and effective
 configuration are captured before the run.
+
+For example, a development invocation through npm MAY resolve
+`@openai/codex@alpha`, but the resolved package version MUST be recorded and a
+benchmark experiment MUST invoke that exact version. Invoking a mutable dist-tag
+independently for every run is invalid because the harness could change within
+one campaign.
+
+`--dangerously-bypass-approvals-and-sandbox` removes the Codex filesystem,
+network, and approval boundary. It MUST NOT be used on a bare development host
+by the benchmark runner. It MAY be used inside an externally hardened ephemeral
+container or virtual machine only when the agent cannot read model credentials,
+unrelated host files, other workspaces, or finalized results. Otherwise the
+adapter uses `workspace-write`, `approval_policy = "never"`, and the task's
+declared network policy.
 
 The adapter maps a successful `turn.completed` event and clean process exit to
 agent-declared completion. It captures JSONL events from stdout and diagnostic
@@ -580,12 +677,12 @@ Current interface references:
 - <https://learn.chatgpt.com/docs/non-interactive-mode>
 - <https://learn.chatgpt.com/docs/developer-commands?surface=cli>
 
-## 17. Run lifecycle and failure taxonomy
+## 18. Run lifecycle and failure taxonomy
 
 The runner executes these stages:
 
 1. Resolve and validate experiment, suite, task, and configuration.
-2. Create a fresh run directory and immutable resolved request.
+2. Create a fresh run directory and finalize an immutable resolved request.
 3. Materialize and verify the initial problem state.
 4. Prepare the controlled task environment.
 5. Launch the harness adapter and start the hard wall timer.
@@ -605,25 +702,78 @@ Terminal reasons are:
 - `provider_error`
 - `harness_error`
 - `environment_error`
+- `runner_error`
 - `cancelled`
 
 Terminal attribution is recorded separately as `agent`, `provider`, `harness`,
-`benchmark`, or `operator`. Evaluation has its own `ok`, `error`, or `not-run`
-status, so a broken evaluator does not erase the fact that an agent completed
-normally. The normalized result format is defined in
+`environment`, `runner`, or `operator`. Evaluation has its own `ok`, `error`, or
+`not-run` status, so a broken evaluator does not erase the fact that an agent
+completed normally. The normalized result format is defined in
 [run-result.schema.json](spec/schemas/run-result.schema.json).
 
-## 18. Limits and completion
+The terminal record is the final summary, not the complete error log. Every
+observed error MUST also be recorded structurally with its phase, stable code,
+attribution, retryability, timestamp, message, and available process, signal,
+or provider-request identifiers. Raw native errors remain in their source
+artifacts. Sensitive values MUST be redacted.
+
+## 19. Timing, usage, and resource observations
+
+Run evidence has three layers:
+
+1. raw native events, stdout, stderr, and evaluator output are authoritative;
+2. `run.json` contains normalized cross-harness facts; and
+3. SQLite indexes, summaries, and reports are rebuildable projections.
+
+UTC timestamps establish historical ordering. Durations MUST be measured with a
+monotonic clock so wall-clock adjustments cannot change elapsed time. The run's
+`started_at` is captured immediately after the resolved request is finalized;
+`finished_at` is captured after all measured phases and immediately before the
+result is published by atomic rename. `wall_time_ms` spans those boundaries.
+
+The runner SHOULD record durations for materialization, setup, harness startup,
+agent execution, evaluation, workspace snapshotting, and finalization. It SHOULD
+also record time to first harness event, first agent output, and first tool call
+from harness launch when those events are observable. Missing phases remain
+absent rather than zero.
+
+Tokens, tool usage, cost, and resources each record a status of `complete`,
+`partial`, or `unavailable`, plus their source. `unavailable` requires a reason.
+`partial` means at least one observation exists but the adapter cannot claim a
+complete run total and therefore also requires a limitation reason. A timeout
+without a final native usage event is normally partial or unavailable, never
+silently zero. Harness counters MUST retain native semantics; adapters MUST NOT
+invent comparable values.
+
+Each adapter version MUST document the observations required for it to claim a
+`complete` resource record. If any required observation is missing, the record
+is `partial` and states the limitation, even when the schema permits a different
+field set for another execution environment.
+
+Normalized resource observations SHOULD include CPU time, peak resident memory,
+filesystem bytes read and written, network bytes sent and received, and initial
+and final workspace sizes when the execution environment can measure them
+reliably. Unsupported metrics are explicitly unavailable. The host fingerprint
+records at least operating system and architecture and SHOULD include kernel,
+CPU, logical processor count, total memory, locale, and timezone.
+
+## 20. Limits and completion
 
 Normal completion is agent-declared. Every run also has a hard wall-time limit.
 Token and tool-call limits MAY be hard, soft, or observe-only depending on the
 harness; their enforcement mode MUST be recorded.
 
+`limits.wall_time_seconds` bounds the harness/agent execution phase beginning at
+adapter launch. `metrics.timing.wall_time_ms` measures the entire attempt after
+request finalization, including materialization, setup, snapshot, evaluation,
+and result preparation. Reports SHOULD expose both the agent phase and the
+end-to-end attempt duration.
+
 The controller MUST terminate a run that exceeds a hard limit and preserve the
 partial workspace and event log. Limits are part of the experiment
 configuration and therefore part of comparison provenance.
 
-## 19. Artifact layout
+## 21. Artifact layout
 
 A campaign SHOULD produce:
 
@@ -644,20 +794,22 @@ results/<experiment-id>/<campaign-id>/
 ```
 
 `campaign.json`, `request.json`, `run.json`, native events, and evaluator output
-are source artifacts. The final `run.json` MUST contain digests for every
-artifact it references. Finalization SHOULD use a temporary file plus atomic
-rename so incomplete runs cannot masquerade as complete records.
+are source artifacts. `request.json` and `run.json` MUST validate against their
+schemas. The final `run.json` MUST contain digests for every artifact it
+references. Finalization SHOULD use a temporary file plus atomic rename so
+incomplete runs cannot masquerade as complete records.
 
 Finalized `campaign.json` MUST validate against
 [campaign.schema.json](spec/schemas/campaign.schema.json). It records the exact
-experiment and suite, observation time, runner provenance, run-result digests,
-and operational summary. Summary counts are cached derivations and MUST be
-verified against the referenced run results when reports are rebuilt.
+experiment and suite, observation time, runner and harness preflight provenance,
+campaign errors, run-result digests, and operational summary. Summary counts are
+cached derivations and MUST be verified against the referenced run results when
+reports are rebuilt.
 
 Sensitive environment values, authentication tokens, and unrelated host paths
 MUST be redacted before artifact persistence.
 
-## 20. Reporting and release QA
+## 22. Reporting and release QA
 
 The initial report surface MUST support:
 
@@ -666,8 +818,10 @@ The initial report surface MUST support:
 3. historical score by campaign observation time;
 4. score and pass rate by task, category, and language;
 5. effort versus quality, wall time, tokens, and cost;
-6. per-task candidate-versus-baseline deltas; and
-7. operational failure counts by reason and attribution.
+6. per-task candidate-versus-baseline deltas;
+7. operational failure counts by reason and attribution;
+8. retry and resume counts without silently replacing original attempts; and
+9. metric completeness and resource observations when available.
 
 A comparison identifies an explicit baseline configuration and one or more
 candidates. The report MUST show paired task deltas before aggregate deltas.
@@ -682,7 +836,7 @@ Release gates may initially be informational, but the data model should support:
 - maximum operational error rate; and
 - required task or category passes.
 
-## 21. Spec-first authoring and validation
+## 23. Spec-first authoring and validation
 
 Adding a task follows this order:
 
@@ -706,10 +860,12 @@ CI MUST eventually enforce:
 - exact evaluator check-ID correspondence;
 - released-suite references to released tasks only;
 - calibration evidence presence;
-- no mutation of released artifact versions; and
+- no mutation of released artifact versions;
+- resolved-request and run-result validity;
+- explicit unavailable or partial metric status rather than omitted totals; and
 - example-manifest validity.
 
-## 22. Initial breadth-first suite
+## 24. Initial breadth-first suite
 
 The first suite should contain approximately eight modest tasks:
 
@@ -734,15 +890,28 @@ known fault variants or mutations, while also verifying that the tests pass on
 the correct implementation. Counting new test lines or accepting a green test
 command alone is not a sufficient score.
 
-## 23. Framework acceptance criteria
+## 25. Framework acceptance criteria
 
 The first implemented milestone is complete when:
 
 1. all manifests validate structurally and across references;
-2. one released task can be materialized reproducibly;
-3. `codex exec` can run it non-interactively with captured JSONL;
-4. the evaluator produces a deterministic weighted score;
-5. a timeout preserves and scores partial work;
-6. repeated campaigns create immutable timestamped results;
-7. a static report compares at least two Codex model/effort configurations; and
-8. the report distinguishes agent outcomes from benchmark infrastructure errors.
+2. the deterministic runner finalizes a validated resolved request before each
+   attempt;
+3. one released task can be materialized reproducibly;
+4. an exact pinned `codex exec` version can run it non-interactively with
+   captured JSONL;
+5. the evaluator produces a deterministic weighted score;
+6. timing, token, tool, cost, and resource measurements record complete,
+   partial, or unavailable status without fabricated values;
+7. structured errors distinguish agent, provider, harness, environment,
+   evaluator, runner, and operator failures;
+8. a timeout preserves and scores partial work;
+9. retry and resume attempts preserve lineage without replacing prior results;
+10. local runs are marked non-canonical and unsafe full-access execution is
+    rejected unless an outer isolation boundary and credential protection are
+    proven;
+11. repeated campaigns create immutable timestamped results;
+12. a static report compares at least two Codex model/effort configurations;
+    and
+13. the report distinguishes agent outcomes from benchmark infrastructure
+    errors.

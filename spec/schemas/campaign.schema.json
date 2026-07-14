@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "campaign.schema.json",
   "title": "Agent Harness Test finalized campaign record",
   "type": "object",
   "additionalProperties": false,
@@ -14,15 +15,17 @@
     "finished_at",
     "status",
     "runner",
+    "preflight",
     "planned_run_count",
     "runs",
     "summary",
     "labels",
+    "errors",
     "warnings"
   ],
   "properties": {
     "schema_version": {
-      "const": "0.1.0"
+      "const": "0.2.0"
     },
     "campaign_id": {
       "type": "string",
@@ -63,6 +66,9 @@
     "runner": {
       "$ref": "#/$defs/runner"
     },
+    "preflight": {
+      "$ref": "#/$defs/preflight"
+    },
     "planned_run_count": {
       "type": "integer",
       "minimum": 1
@@ -82,6 +88,12 @@
         "type": "string"
       }
     },
+    "errors": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/errorRecord"
+      }
+    },
     "warnings": {
       "type": "array",
       "items": {
@@ -92,6 +104,33 @@
       "$ref": "common.schema.json#/$defs/extensions"
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "completed"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "preflight": {
+            "type": "object",
+            "properties": {
+              "harness_runtimes": {
+                "type": "array",
+                "minItems": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "experimentReference": {
       "type": "object",
@@ -122,7 +161,8 @@
       "additionalProperties": false,
       "required": [
         "version",
-        "git_commit"
+        "git_commit",
+        "runtime"
       ],
       "properties": {
         "version": {
@@ -131,6 +171,77 @@
         "git_commit": {
           "type": "string",
           "pattern": "^[a-f0-9]{7,64}$"
+        },
+        "runtime": {
+          "$ref": "common.schema.json#/$defs/runnerRuntime"
+        }
+      }
+    },
+    "preflight": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "started_at",
+        "finished_at",
+        "harness_runtimes"
+      ],
+      "properties": {
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "harness_runtimes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/harnessRuntimeResolution"
+          }
+        }
+      }
+    },
+    "harnessRuntimeResolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "harness_family",
+        "runtime_source",
+        "requested_runtime",
+        "resolved_runtime_version",
+        "runtime_digest",
+        "executable_digest",
+        "acquisition"
+      ],
+      "properties": {
+        "harness_family": {
+          "$ref": "common.schema.json#/$defs/identifier"
+        },
+        "runtime_source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requested_runtime": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resolved_runtime_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtime_digest": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "executable_digest": {
+          "$ref": "common.schema.json#/$defs/sha256"
+        },
+        "acquisition": {
+          "enum": [
+            "preinstalled",
+            "cache-hit",
+            "installed"
+          ]
         }
       }
     },

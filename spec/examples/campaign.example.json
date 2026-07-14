@@ -1,5 +1,5 @@
 {
-  "schema_version": "0.1.0",
+  "schema_version": "0.2.0",
   "campaign_id": "2026-07-14t180000z-codex-effort-smoke",
   "experiment": {
     "id": "codex-effort-smoke",
@@ -15,12 +15,31 @@
   },
   "mode": "smoke",
   "observed_at": "2026-07-14T18:00:00Z",
-  "started_at": "2026-07-14T18:00:00Z",
+  "started_at": "2026-07-14T17:59:45Z",
   "finished_at": "2026-07-14T18:02:00Z",
   "status": "completed",
   "runner": {
     "version": "0.1.0",
-    "git_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    "git_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "runtime": {
+      "name": "node",
+      "version": "24.4.1"
+    }
+  },
+  "preflight": {
+    "started_at": "2026-07-14T17:59:45Z",
+    "finished_at": "2026-07-14T17:59:59Z",
+    "harness_runtimes": [
+      {
+        "harness_family": "codex",
+        "runtime_source": "npm:@openai/codex",
+        "requested_runtime": "0.145.0-alpha.11",
+        "resolved_runtime_version": "0.145.0-alpha.11",
+        "runtime_digest": "sha256:1212121212121212121212121212121212121212121212121212121212121212",
+        "executable_digest": "sha256:1313131313131313131313131313131313131313131313131313131313131313",
+        "acquisition": "cache-hit"
+      }
+    ]
   },
   "planned_run_count": 2,
   "runs": [
@@ -45,6 +64,7 @@
   "labels": {
     "purpose": "structural-example"
   },
+  "errors": [],
   "warnings": [
     "Smoke evidence uses one repetition per matrix cell."
   ]

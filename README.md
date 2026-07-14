@@ -16,9 +16,9 @@ added without changing task definitions.
 
 ## Current status
 
-This repository currently contains the v0 framework contract, schemas, and
-illustrative manifests. It does not yet contain an executable runner or released
-benchmark tasks.
+This repository currently contains the `0.2.0-draft` framework contract,
+schemas, and illustrative manifests. It does not yet contain an executable
+runner or released benchmark tasks.
 
 ## Start here
 
@@ -29,6 +29,8 @@ benchmark tasks.
 ## Core principles
 
 - Specifications precede fixtures and implementation.
+- A deterministic program owns execution and scoring; an agent may operate or
+  investigate the runner but never becomes the benchmark control plane.
 - Released task and suite versions are immutable.
 - Every runnable task resolves to fingerprinted prompt, problem-state,
   environment, and evaluator artifacts.
@@ -36,6 +38,10 @@ benchmark tasks.
   plane or evaluator.
 - Correctness, pass rate, operational reliability, time, tokens, and cost remain
   separately inspectable even when a headline score is shown.
+- Missing usage and resource metrics are explicitly complete, partial, or
+  unavailable; absent telemetry is never reported as zero.
+- Canonical runs use an isolated, fingerprinted environment. Local host runs are
+  useful but explicitly non-canonical.
 - Raw run artifacts are authoritative; databases and reports are rebuildable
   projections.
 - Historical comparisons use an unchanged suite version or an explicitly
@@ -43,7 +49,8 @@ benchmark tasks.
 
 ## Intended implementation sequence
 
-1. Implement schema and cross-file validation plus canonical digests.
+1. Implement schema and cross-file validation, resolved run requests, and
+   canonical digests.
 2. Implement one end-to-end task and the `codex exec` adapter.
 3. Expand to a small breadth-first suite across Python, TypeScript, and Go.
 4. Add historical reports and candidate-versus-baseline release views.

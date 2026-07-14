@@ -1,0 +1,148 @@
+{
+  "schema_version": "0.2.0",
+  "run_id": "01J00000000000000000000000",
+  "campaign_id": "2026-07-14t180000z-codex-effort-smoke",
+  "created_at": "2026-07-14T18:00:00Z",
+  "experiment": {
+    "id": "codex-effort-smoke",
+    "version": "1.0.0",
+    "spec_path": "experiments/codex-effort-smoke/1.0.0.yaml",
+    "spec_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+  },
+  "suite": {
+    "id": "demo-breadth",
+    "version": "1.0.0",
+    "spec_path": "suites/demo-breadth/1.0.0.yaml",
+    "spec_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+  },
+  "task": {
+    "id": "example-cli",
+    "version": "1.0.0",
+    "spec_path": "tasks/example-cli/1.0.0/task.yaml",
+    "spec_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+    "prompt_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "initial_tree_digest": "tree-sha256-v1:1111111111111111111111111111111111111111111111111111111111111111",
+    "evaluator_digest": "tree-sha256-v1:3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "repetition": 1,
+  "schedule_index": 0,
+  "attempt": {
+    "number": 1,
+    "mode": "initial",
+    "initiated_by": "runner"
+  },
+  "workspace": {
+    "path": "/workspace",
+    "prompt_path": "tasks/example-cli/1.0.0/prompt.md",
+    "prompt_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "initial_tree_digest": "tree-sha256-v1:1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "configuration": {
+    "id": "codex-medium",
+    "harness": {
+      "family": "codex",
+      "interface": "cli-exec",
+      "adapter_id": "codex-cli",
+      "adapter_version": "0.1.0",
+      "runtime_version": "0.145.0-alpha.11",
+      "config": {
+        "sandbox": "workspace-write",
+        "network": "enabled",
+        "user_config": "ignored"
+      }
+    },
+    "model": {
+      "provider": "openai",
+      "requested_id": "gpt-5.6-sol"
+    },
+    "effort": {
+      "display_label": "medium",
+      "native_value": "medium"
+    },
+    "limits": {
+      "wall_time_seconds": {
+        "value": 1200,
+        "enforcement": "hard"
+      },
+      "total_tokens": {
+        "value": 200000,
+        "enforcement": "observe-only"
+      }
+    }
+  },
+  "execution": {
+    "mode": "container",
+    "isolation": "combined",
+    "canonical": true,
+    "credential_protection": "short-lived",
+    "environment_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "operating_system": "linux",
+    "architecture": "arm64",
+    "runtime_name": "docker",
+    "runtime_version": "27.5.1",
+    "image_digest": "sha256:2424242424242424242424242424242424242424242424242424242424242424"
+  },
+  "network": {
+    "mode": "enabled"
+  },
+  "invocation": {
+    "runtime_source": "npm:@openai/codex",
+    "requested_runtime": "0.145.0-alpha.11",
+    "resolved_runtime_version": "0.145.0-alpha.11",
+    "runtime_digest": "sha256:1212121212121212121212121212121212121212121212121212121212121212",
+    "executable_digest": "sha256:1313131313131313131313131313131313131313131313131313131313131313",
+    "argv": [
+      "codex",
+      "exec",
+      "--json",
+      "--ephemeral",
+      "--ignore-user-config",
+      "--strict-config",
+      "--sandbox",
+      "workspace-write",
+      "--model",
+      "gpt-5.6-sol",
+      "--ask-for-approval",
+      "never",
+      "-c",
+      "model_reasoning_effort=\"medium\"",
+      "-c",
+      "sandbox_workspace_write.network_access=true",
+      "-C",
+      "/workspace",
+      "-"
+    ],
+    "working_directory": "/workspace",
+    "stdin_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "environment": [
+      {
+        "name": "LANG",
+        "classification": "public",
+        "source": "runner",
+        "value": "C.UTF-8"
+      },
+      {
+        "name": "CODEX_HOME",
+        "classification": "public",
+        "source": "runner",
+        "value": "/control/codex-home"
+      }
+    ],
+    "secret_names": [
+      "CODEX_AUTH"
+    ],
+    "full_access": false
+  },
+  "artifact_targets": {
+    "request": "request.json",
+    "run_result": "run.json",
+    "native_events": "events.native.jsonl",
+    "normalized_events": "events.normalized.jsonl",
+    "stdout": "stdout.log",
+    "stderr": "stderr.log",
+    "final_message": "final-message.txt",
+    "workspace_patch": "workspace.patch",
+    "workspace_tree": "workspace-tree.json",
+    "evaluator_result": "evaluator.json"
+  }
+}

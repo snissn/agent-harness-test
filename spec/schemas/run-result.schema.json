@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "run-result.schema.json",
   "title": "Agent Harness Test RunResult",
   "type": "object",
   "additionalProperties": false,
@@ -13,6 +14,7 @@
     "configuration_id",
     "repetition",
     "schedule_index",
+    "attempt",
     "observed_at",
     "started_at",
     "finished_at",
@@ -21,12 +23,13 @@
     "provenance",
     "metrics",
     "evaluation",
+    "errors",
     "artifacts",
     "warnings"
   ],
   "properties": {
     "schema_version": {
-      "const": "0.1.0"
+      "const": "0.2.0"
     },
     "run_id": {
       "type": "string",
@@ -56,6 +59,9 @@
       "type": "integer",
       "minimum": 0
     },
+    "attempt": {
+      "$ref": "common.schema.json#/$defs/attempt"
+    },
     "observed_at": {
       "type": "string",
       "format": "date-time"
@@ -82,6 +88,12 @@
     },
     "evaluation": {
       "$ref": "#/$defs/evaluationSummary"
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/errorRecord"
+      }
     },
     "artifacts": {
       "type": "array",
@@ -179,6 +191,7 @@
             "provider_error",
             "harness_error",
             "environment_error",
+            "runner_error",
             "cancelled"
           ]
         },
@@ -187,7 +200,8 @@
             "agent",
             "provider",
             "harness",
-            "benchmark",
+            "environment",
+            "runner",
             "operator"
           ]
         },
@@ -202,6 +216,10 @@
         },
         "message": {
           "type": "string"
+        },
+        "signal": {
+          "type": "string",
+          "minLength": 1
         }
       }
     },
@@ -286,10 +304,10 @@
       "required": [
         "runner_version",
         "runner_git_commit",
+        "runner_runtime",
         "request_digest",
-        "canonical_environment",
-        "host_platform",
-        "execution_environment_digest",
+        "host",
+        "execution",
         "post_setup_tree_digest",
         "final_tree_digest"
       ],
@@ -301,18 +319,17 @@
           "type": "string",
           "pattern": "^[a-f0-9]{7,64}$"
         },
+        "runner_runtime": {
+          "$ref": "common.schema.json#/$defs/runnerRuntime"
+        },
         "request_digest": {
           "$ref": "common.schema.json#/$defs/sha256"
         },
-        "canonical_environment": {
-          "type": "boolean"
+        "host": {
+          "$ref": "common.schema.json#/$defs/hostFingerprint"
         },
-        "host_platform": {
-          "type": "string",
-          "minLength": 1
-        },
-        "execution_environment_digest": {
-          "$ref": "common.schema.json#/$defs/sha256"
+        "execution": {
+          "$ref": "common.schema.json#/$defs/executionTopology"
         },
         "post_setup_tree_digest": {
           "$ref": "common.schema.json#/$defs/treeDigest"
@@ -322,10 +339,97 @@
         }
       }
     },
+    "timingMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clock_source",
+        "wall_time_ms",
+        "phases_ms"
+      ],
+      "properties": {
+        "clock_source": {
+          "const": "monotonic"
+        },
+        "wall_time_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "phases_ms": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "materialization": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "setup": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "harness_startup": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "agent": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "evaluation": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "snapshot": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "finalization": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "time_to_first_harness_event_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "time_to_first_agent_output_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "time_to_first_tool_call_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
     "tokenUsage": {
       "type": "object",
       "additionalProperties": false,
+      "required": [
+        "status",
+        "source"
+      ],
       "properties": {
+        "status": {
+          "enum": [
+            "complete",
+            "partial",
+            "unavailable"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "unavailable_reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "partial_reason": {
+          "type": "string",
+          "minLength": 1
+        },
         "input": {
           "type": "integer",
           "minimum": 0
@@ -345,61 +449,672 @@
         "total": {
           "type": "integer",
           "minimum": 0
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "complete"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "unavailable_reason": false,
+              "partial_reason": false,
+              "input": true,
+              "output": true,
+              "total": true
+            },
+            "required": [
+              "input",
+              "output",
+              "total"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "partial"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "unavailable_reason": false,
+              "partial_reason": true
+            },
+            "required": [
+              "partial_reason"
+            ],
+            "anyOf": [
+              {
+                "properties": {
+                  "input": true
+                },
+                "required": [
+                  "input"
+                ]
+              },
+              {
+                "properties": {
+                  "output": true
+                },
+                "required": [
+                  "output"
+                ]
+              },
+              {
+                "properties": {
+                  "total": true
+                },
+                "required": [
+                  "total"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "unavailable"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "partial_reason": false,
+              "input": false,
+              "cached_input": false,
+              "output": false,
+              "reasoning_output": false,
+              "total": false,
+              "unavailable_reason": true
+            },
+            "required": [
+              "unavailable_reason"
+            ]
+          }
+        }
+      ]
+    },
+    "toolUsage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "source"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "complete",
+            "partial",
+            "unavailable"
+          ]
         },
         "source": {
           "type": "string",
           "minLength": 1
+        },
+        "unavailable_reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "partial_reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "by_type": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9._-]*$"
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "complete"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "unavailable_reason": false,
+              "partial_reason": false,
+              "total": true,
+              "failed": true
+            },
+            "required": [
+              "total",
+              "failed"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "partial"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "unavailable_reason": false,
+              "partial_reason": true
+            },
+            "required": [
+              "partial_reason"
+            ],
+            "anyOf": [
+              {
+                "properties": {
+                  "total": true
+                },
+                "required": [
+                  "total"
+                ]
+              },
+              {
+                "properties": {
+                  "failed": true
+                },
+                "required": [
+                  "failed"
+                ]
+              },
+              {
+                "properties": {
+                  "by_type": true
+                },
+                "required": [
+                  "by_type"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "unavailable"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "partial_reason": false,
+              "total": false,
+              "failed": false,
+              "by_type": false,
+              "unavailable_reason": true
+            },
+            "required": [
+              "unavailable_reason"
+            ]
+          }
+        }
+      ]
+    },
+    "costMetric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "source"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "complete",
+            "partial",
+            "unavailable"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "unavailable_reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "partial_reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "amount": {
+          "type": "number",
+          "minimum": 0
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "complete"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "unavailable_reason": false,
+              "partial_reason": false,
+              "amount": true,
+              "currency": true
+            },
+            "required": [
+              "amount",
+              "currency"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "partial"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "unavailable_reason": false,
+              "partial_reason": true,
+              "amount": true,
+              "currency": true
+            },
+            "required": [
+              "partial_reason",
+              "amount",
+              "currency"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "unavailable"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "partial_reason": false,
+              "amount": false,
+              "currency": false,
+              "unavailable_reason": true
+            },
+            "required": [
+              "unavailable_reason"
+            ]
+          }
+        }
+      ]
+    },
+    "resourceUsage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "source"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "complete",
+            "partial",
+            "unavailable"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "unavailable_reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "partial_reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scope": {
+          "enum": [
+            "agent-process",
+            "process-tree",
+            "container",
+            "virtual-machine"
+          ]
+        },
+        "cpu_time_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "peak_rss_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "filesystem_read_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "filesystem_written_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "network_received_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "network_sent_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "workspace_initial_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "workspace_final_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "workspace_delta_bytes": {
+          "type": "integer"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "complete"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "unavailable_reason": false,
+              "partial_reason": false,
+              "scope": true
+            },
+            "required": [
+              "scope"
+            ],
+            "anyOf": [
+              {
+                "properties": {
+                  "cpu_time_ms": true
+                },
+                "required": [
+                  "cpu_time_ms"
+                ]
+              },
+              {
+                "properties": {
+                  "peak_rss_bytes": true
+                },
+                "required": [
+                  "peak_rss_bytes"
+                ]
+              },
+              {
+                "properties": {
+                  "filesystem_read_bytes": true
+                },
+                "required": [
+                  "filesystem_read_bytes"
+                ]
+              },
+              {
+                "properties": {
+                  "filesystem_written_bytes": true
+                },
+                "required": [
+                  "filesystem_written_bytes"
+                ]
+              },
+              {
+                "properties": {
+                  "network_received_bytes": true
+                },
+                "required": [
+                  "network_received_bytes"
+                ]
+              },
+              {
+                "properties": {
+                  "network_sent_bytes": true
+                },
+                "required": [
+                  "network_sent_bytes"
+                ]
+              },
+              {
+                "properties": {
+                  "workspace_initial_bytes": true
+                },
+                "required": [
+                  "workspace_initial_bytes"
+                ]
+              },
+              {
+                "properties": {
+                  "workspace_final_bytes": true
+                },
+                "required": [
+                  "workspace_final_bytes"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "partial"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "unavailable_reason": false,
+              "scope": true,
+              "partial_reason": true
+            },
+            "required": [
+              "scope",
+              "partial_reason"
+            ],
+            "anyOf": [
+              {
+                "properties": {
+                  "cpu_time_ms": true
+                },
+                "required": [
+                  "cpu_time_ms"
+                ]
+              },
+              {
+                "properties": {
+                  "peak_rss_bytes": true
+                },
+                "required": [
+                  "peak_rss_bytes"
+                ]
+              },
+              {
+                "properties": {
+                  "filesystem_read_bytes": true
+                },
+                "required": [
+                  "filesystem_read_bytes"
+                ]
+              },
+              {
+                "properties": {
+                  "filesystem_written_bytes": true
+                },
+                "required": [
+                  "filesystem_written_bytes"
+                ]
+              },
+              {
+                "properties": {
+                  "network_received_bytes": true
+                },
+                "required": [
+                  "network_received_bytes"
+                ]
+              },
+              {
+                "properties": {
+                  "network_sent_bytes": true
+                },
+                "required": [
+                  "network_sent_bytes"
+                ]
+              },
+              {
+                "properties": {
+                  "workspace_initial_bytes": true
+                },
+                "required": [
+                  "workspace_initial_bytes"
+                ]
+              },
+              {
+                "properties": {
+                  "workspace_final_bytes": true
+                },
+                "required": [
+                  "workspace_final_bytes"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "unavailable"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "partial_reason": false,
+              "scope": false,
+              "cpu_time_ms": false,
+              "peak_rss_bytes": false,
+              "filesystem_read_bytes": false,
+              "filesystem_written_bytes": false,
+              "network_received_bytes": false,
+              "network_sent_bytes": false,
+              "workspace_initial_bytes": false,
+              "workspace_final_bytes": false,
+              "workspace_delta_bytes": false,
+              "unavailable_reason": true
+            },
+            "required": [
+              "unavailable_reason"
+            ]
+          }
+        }
+      ]
     },
     "metrics": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "wall_time_ms"
+        "timing",
+        "tokens",
+        "tool_usage",
+        "cost",
+        "resources"
       ],
       "properties": {
-        "wall_time_ms": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "agent_time_ms": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "evaluator_time_ms": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "tool_calls": {
-          "type": "integer",
-          "minimum": 0
+        "timing": {
+          "$ref": "#/$defs/timingMetrics"
         },
         "tokens": {
           "$ref": "#/$defs/tokenUsage"
         },
+        "tool_usage": {
+          "$ref": "#/$defs/toolUsage"
+        },
         "cost": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "amount",
-            "currency",
-            "source"
-          ],
-          "properties": {
-            "amount": {
-              "type": "number",
-              "minimum": 0
-            },
-            "currency": {
-              "type": "string",
-              "pattern": "^[A-Z]{3}$"
-            },
-            "source": {
-              "type": "string",
-              "minLength": 1
-            }
-          }
+          "$ref": "#/$defs/costMetric"
+        },
+        "resources": {
+          "$ref": "#/$defs/resourceUsage"
         }
       }
     },

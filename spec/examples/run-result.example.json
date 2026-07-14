@@ -1,5 +1,5 @@
 {
-  "schema_version": "0.1.0",
+  "schema_version": "0.2.0",
   "run_id": "01J00000000000000000000000",
   "campaign_id": "2026-07-14t180000z-codex-effort-smoke",
   "experiment": {
@@ -26,6 +26,11 @@
   "configuration_id": "codex-medium",
   "repetition": 1,
   "schedule_index": 0,
+  "attempt": {
+    "number": 1,
+    "mode": "initial",
+    "initiated_by": "runner"
+  },
   "observed_at": "2026-07-14T18:00:00Z",
   "started_at": "2026-07-14T18:00:01Z",
   "finished_at": "2026-07-14T18:00:32Z",
@@ -73,25 +78,86 @@
   "provenance": {
     "runner_version": "0.1.0",
     "runner_git_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "runner_runtime": {
+      "name": "node",
+      "version": "24.4.1"
+    },
     "request_digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
-    "canonical_environment": true,
-    "host_platform": "darwin/arm64",
-    "execution_environment_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "host": {
+      "operating_system": "darwin",
+      "architecture": "arm64",
+      "kernel": "Darwin 25.5.0",
+      "cpu_model": "Apple M3",
+      "logical_processor_count": 8,
+      "total_memory_bytes": 17179869184,
+      "locale": "en_US.UTF-8",
+      "timezone": "Pacific/Honolulu"
+    },
+    "execution": {
+      "mode": "container",
+      "isolation": "combined",
+      "canonical": true,
+      "credential_protection": "short-lived",
+      "environment_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "operating_system": "linux",
+      "architecture": "arm64",
+      "runtime_name": "docker",
+      "runtime_version": "27.5.1",
+      "image_digest": "sha256:2424242424242424242424242424242424242424242424242424242424242424"
+    },
     "post_setup_tree_digest": "tree-sha256-v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "final_tree_digest": "tree-sha256-v1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   },
   "metrics": {
-    "wall_time_ms": 31000,
-    "agent_time_ms": 29000,
-    "evaluator_time_ms": 2000,
-    "tool_calls": 8,
+    "timing": {
+      "clock_source": "monotonic",
+      "wall_time_ms": 31000,
+      "phases_ms": {
+        "materialization": 250,
+        "setup": 750,
+        "harness_startup": 700,
+        "agent": 27000,
+        "snapshot": 300,
+        "evaluation": 1800,
+        "finalization": 200
+      },
+      "time_to_first_harness_event_ms": 820,
+      "time_to_first_agent_output_ms": 1500,
+      "time_to_first_tool_call_ms": 2100
+    },
     "tokens": {
+      "status": "complete",
+      "source": "codex-turn-completed",
       "input": 12000,
       "cached_input": 8000,
       "output": 2500,
       "reasoning_output": 1200,
-      "total": 14500,
-      "source": "codex-turn-completed"
+      "total": 14500
+    },
+    "tool_usage": {
+      "status": "complete",
+      "source": "codex-native-events",
+      "total": 8,
+      "failed": 1,
+      "by_type": {
+        "command_execution": 8
+      }
+    },
+    "cost": {
+      "status": "unavailable",
+      "source": "codex-cli",
+      "unavailable_reason": "The ChatGPT-authenticated CLI did not expose a per-run currency cost."
+    },
+    "resources": {
+      "status": "partial",
+      "source": "container-runtime+cgroup-v2",
+      "partial_reason": "Filesystem and network counters could not be attributed exclusively to the agent process tree.",
+      "scope": "container",
+      "cpu_time_ms": 18400,
+      "peak_rss_bytes": 536870912,
+      "workspace_initial_bytes": 1048576,
+      "workspace_final_bytes": 1179648,
+      "workspace_delta_bytes": 131072
     }
   },
   "evaluation": {
@@ -121,13 +187,68 @@
     "end_to_end_passed": false,
     "eligible_for_quality_aggregate": true
   },
+  "errors": [
+    {
+      "occurred_at": "2026-07-14T18:00:10Z",
+      "phase": "agent",
+      "code": "tool.command-exit",
+      "attribution": "agent",
+      "retryable": true,
+      "message": "One agent-initiated command exited unsuccessfully before the agent recovered.",
+      "exit_code": 1,
+      "artifact_path": "runs/01J00000000000000000000000/stdout.log",
+      "artifact_digest": "sha256:1414141414141414141414141414141414141414141414141414141414141414"
+    }
+  ],
   "artifacts": [
+    {
+      "kind": "request",
+      "path": "runs/01J00000000000000000000000/request.json",
+      "digest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+      "media_type": "application/json",
+      "bytes": 6144
+    },
     {
       "kind": "native-events",
       "path": "runs/01J00000000000000000000000/events.native.jsonl",
       "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
       "media_type": "application/x-ndjson",
       "bytes": 8192
+    },
+    {
+      "kind": "stdout",
+      "path": "runs/01J00000000000000000000000/stdout.log",
+      "digest": "sha256:1414141414141414141414141414141414141414141414141414141414141414",
+      "media_type": "text/plain",
+      "bytes": 2048
+    },
+    {
+      "kind": "stderr",
+      "path": "runs/01J00000000000000000000000/stderr.log",
+      "digest": "sha256:1515151515151515151515151515151515151515151515151515151515151515",
+      "media_type": "text/plain",
+      "bytes": 128
+    },
+    {
+      "kind": "final-message",
+      "path": "runs/01J00000000000000000000000/final-message.txt",
+      "digest": "sha256:1616161616161616161616161616161616161616161616161616161616161616",
+      "media_type": "text/plain",
+      "bytes": 512
+    },
+    {
+      "kind": "workspace-patch",
+      "path": "runs/01J00000000000000000000000/workspace.patch",
+      "digest": "sha256:1717171717171717171717171717171717171717171717171717171717171717",
+      "media_type": "text/x-diff",
+      "bytes": 4096
+    },
+    {
+      "kind": "workspace-tree",
+      "path": "runs/01J00000000000000000000000/workspace-tree.json",
+      "digest": "sha256:1818181818181818181818181818181818181818181818181818181818181818",
+      "media_type": "application/json",
+      "bytes": 3072
     },
     {
       "kind": "evaluator-result",

@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "suite.schema.json",
   "title": "Agent Harness Test SuiteSpec",
   "type": "object",
   "additionalProperties": false,
@@ -14,7 +15,7 @@
   ],
   "properties": {
     "schema_version": {
-      "const": "0.1.0"
+      "const": "0.2.0"
     },
     "id": {
       "$ref": "common.schema.json#/$defs/identifier"
