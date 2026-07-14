@@ -13,11 +13,11 @@
     "validate:file": "tsx src/cli.ts file"
   },
   "dependencies": {
-    "ajv": "8.17.1",
+    "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
     "json-dup-key-validator": "1.0.3",
     "json-canonicalize": "1.0.6",
-    "yaml": "2.8.1"
+    "yaml": "2.9.0"
   },
   "devDependencies": {
     "@types/node": "24.3.0",
