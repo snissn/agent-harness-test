@@ -11,27 +11,35 @@ const schemaByKind: Record<string, string> = {
 };
 const require = createRequire(import.meta.url);
 const addFormats = require("ajv-formats") as (validator: Ajv2020) => void;
+const identifier = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+const semver = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const exampleKinds: Record<string, string> = {
+  "task.example.json": "task", "suite.example.json": "suite", "experiment.example.json": "experiment",
+  "campaign.example.json": "campaign", "evaluation.example.json": "evaluation", "run-request.example.json": "run-request", "run-result.example.json": "run-result"
+};
+
+export function kindFromRepositoryPath(file: string): string | undefined {
+  const parts = file.replace(/^\.\//, "").split(/[\\/]/);
+  if (parts.length === 3 && parts[0] === "spec" && parts[1] === "examples") return exampleKinds[parts[2]!] ?? undefined;
+  if (parts.length === 4 && parts[0] === "tasks" && identifier.test(parts[1]!) && semver.test(parts[2]!) && /task\.(json|ya?ml)$/i.test(parts[3]!)) return "task";
+  if (parts.length === 3 && identifier.test(parts[1]!)) {
+    const match = /^(.*)\.(json|ya?ml)$/i.exec(parts[2]!);
+    if (match && semver.test(match[1]!)) {
+      if (parts[0] === "suites") return "suite";
+      if (parts[0] === "experiments") return "experiment";
+    }
+  }
+  if (parts.length === 4 && parts[0] === "results" && parts.slice(1, 3).every(Boolean) && parts[3] === "campaign.json") return "campaign";
+  if (parts.length === 6 && parts[0] === "results" && parts.slice(1, 3).every(Boolean) && parts[3] === "runs" && parts[4]) {
+    if (parts[5] === "request.json") return "run-request";
+    if (parts[5] === "run.json") return "run-result";
+    if (parts[5] === "evaluator.json") return "evaluation";
+  }
+  return undefined;
+}
 
 export function kindFromPath(file: string): string | undefined {
-  const name = basename(file);
-  const exampleKinds: Record<string, string> = {
-    "task.example.json": "task", "suite.example.json": "suite", "experiment.example.json": "experiment",
-    "campaign.example.json": "campaign", "evaluation.example.json": "evaluation", "run-request.example.json": "run-request", "run-result.example.json": "run-result"
-  };
-  if (exampleKinds[name]) return exampleKinds[name];
-  const parts = file.replace(/^\.\//, "").split(/[\\/]/);
-  const versionedManifest = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\.(json|ya?ml)$/i;
-  for (const [directory, kind] of [["suites", "suite"], ["experiments", "experiment"]] as const) {
-    const index = parts.lastIndexOf(directory);
-    if (index >= 0) return parts.length === index + 3 && versionedManifest.test(parts[index + 2]!) ? kind : undefined;
-  }
-  const exactKinds: Record<string, string> = {
-    "task.json": "task", "task.yaml": "task", "task.yml": "task", "campaign.json": "campaign",
-    "request.json": "run-request", "run-request.json": "run-request", "run.json": "run-result",
-    "run-result.json": "run-result", "evaluator.json": "evaluation"
-  };
-  if (exactKinds[name]) return exactKinds[name];
-  return undefined;
+  return kindFromRepositoryPath(file) ?? ({ "run-request.json": "run-request", "run-result.json": "run-result" } as Record<string, string>)[basename(file)];
 }
 
 export class SchemaValidator {

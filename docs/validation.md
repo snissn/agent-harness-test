@@ -12,15 +12,17 @@ npm run validate
 
 `npm run validate` loads canonical checked-in JSON/YAML manifests under the
 repository layout plus all structural examples. Suite and experiment manifests
-must use their versioned canonical paths; result source manifests use the exact
-`campaign.json`, `request.json`, `run.json`, and `evaluator.json` names. Derived
-report JSON, including summary filenames that merely contain a manifest kind,
-is not treated as a source manifest. Validation rejects duplicate keys, YAML tags,
+must use their versioned canonical paths; task and result source manifests must
+use the complete canonical layouts defined in `SPEC.md`. JSON below result
+`reports/` directories is never inferred as a source manifest, even when its
+name or nested directories resemble one. Validation rejects duplicate keys, YAML tags,
 anchors, aliases, merge keys, non-string mapping keys, non-JSON YAML values,
 unsafe/escaping paths, schema errors, and the implemented
 cross-file invariants. Diagnostics use `file [rule] path: message` and exit
 nonzero on any invalid input. Validate one named file structurally with
-`npm run validate:file -- tasks/<id>/<version>/task.yaml`.
+`npm run validate:file -- tasks/<id>/<version>/task.yaml`. The one-file command
+also retains `run-request.json` and `run-result.json` as explicit standalone
+filename aliases; repository discovery does not recognize those aliases.
 
 Task authors should add a failing fixture/test first, update `SPEC.md` and its
 schema before using a new concept, then add the valid manifest/artifacts and

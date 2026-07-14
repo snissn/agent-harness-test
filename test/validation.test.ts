@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { canonicalJson, manifestDigest, sha256, treeDigest } from "../src/digests.js";
 import { loadManifestText } from "../src/load.js";
-import { kindFromPath, SchemaValidator } from "../src/schema.js";
+import { kindFromPath, kindFromRepositoryPath, SchemaValidator } from "../src/schema.js";
 import { safeRelativePath, validateRepository } from "../src/repository.js";
 import { ValidationError } from "../src/types.js";
 
@@ -13,16 +13,17 @@ const root = new URL("..", import.meta.url).pathname;
 
 test("all seven checked-in examples are discoverable and schema-validated", async () => {
   const expected = ["task", "suite", "experiment", "campaign", "evaluation", "run-request", "run-result"];
-  for (const kind of expected) assert.equal(kindFromPath(join("spec/examples", `${kind}.example.json`)), kind);
-  assert.equal(kindFromPath("suites/smoke/1.0.0.yaml"), "suite");
-  assert.equal(kindFromPath("experiments/smoke/1.0.0.yaml"), "experiment");
-  assert.equal(kindFromPath("results/campaigns/demo/runs/01J00000000000000000000000/request.json"), "run-request");
-  assert.equal(kindFromPath("results/demo/campaign/run-result.json"), "run-result");
-  assert.equal(kindFromPath("results/demo/campaign/runs/run/evaluator.json"), "evaluation");
-  assert.equal(kindFromPath("tasks/demo/1.0.0/state/suites/data.json"), undefined);
-  assert.equal(kindFromPath("suites/demo/campaign.json"), undefined);
-  assert.equal(kindFromPath("experiments/demo/notes.json"), undefined);
-  for (const name of ["suite-summary.json", "experiment-notes.json", "campaign-report.json", "evaluation-breakdown.json"]) assert.equal(kindFromPath(`results/demo/reports/${name}`), undefined);
+  for (const kind of expected) assert.equal(kindFromRepositoryPath(join("spec/examples", `${kind}.example.json`)), kind);
+  assert.equal(kindFromRepositoryPath("tasks/demo/1.0.0/task.yaml"), "task");
+  assert.equal(kindFromRepositoryPath("suites/smoke/1.0.0.yaml"), "suite");
+  assert.equal(kindFromRepositoryPath("experiments/smoke/1.0.0.yaml"), "experiment");
+  assert.equal(kindFromRepositoryPath("results/demo/campaign/campaign.json"), "campaign");
+  assert.equal(kindFromRepositoryPath("results/demo/campaign/runs/01J00000000000000000000000/request.json"), "run-request");
+  assert.equal(kindFromRepositoryPath("results/demo/campaign/runs/01J00000000000000000000000/run.json"), "run-result");
+  assert.equal(kindFromRepositoryPath("results/demo/campaign/runs/01J00000000000000000000000/evaluator.json"), "evaluation");
+  assert.equal(kindFromPath("run-request.json"), "run-request");
+  assert.equal(kindFromPath("run-result.json"), "run-result");
+  for (const path of ["tasks/demo/1.0.0/state/suites/foo/1.0.0.json", "suites/demo/campaign.json", "experiments/demo/notes.json", "results/demo/campaign/run-result.json", "results/demo/campaign/reports/campaign.json", "results/demo/campaign/reports/task.json", "results/demo/campaign/reports/suites/foo/1.0.0.json"]) assert.equal(kindFromRepositoryPath(path), undefined);
   await validateRepository(root);
 });
 
@@ -252,10 +253,12 @@ test("canonical campaign and run result artifacts are discovered and schema-vali
   await assert.rejects(validateRepository(fixture), (error: unknown) => error instanceof ValidationError && ["campaign.json", "request.json", "run.json", "evaluator.json"].every((name) => error.diagnostics.some((item) => item.file.endsWith(name) && item.code === "schema/required")));
 });
 
-test("derived report JSON with manifest-kind substrings is ignored", async () => {
+test("noncanonical result reports are ignored even with exact names or canonical-looking directories", async () => {
   const fixture = await mkdtemp(join(tmpdir(), "aht-repo-")); await cp(join(root, "spec/schemas"), join(fixture, "spec/schemas"), { recursive: true }); await mkdir(join(fixture, "spec/examples"), { recursive: true });
   const reports = join(fixture, "results/demo/campaign/reports"); await mkdir(reports, { recursive: true });
-  for (const name of ["suite-summary.json", "experiment-notes.json", "campaign-report.json", "evaluation-breakdown.json"]) await writeFile(join(reports, name), "{ not a manifest }");
+  for (const name of ["suite-summary.json", "experiment-notes.json", "campaign.json", "task.json", "request.json", "run.json", "evaluator.json", "run-request.json", "run-result.json"]) await writeFile(join(reports, name), "{ not a manifest }");
+  await mkdir(join(reports, "suites/foo"), { recursive: true }); await writeFile(join(reports, "suites/foo/1.0.0.json"), "{ not a manifest }");
+  await mkdir(join(reports, "experiments/foo"), { recursive: true }); await writeFile(join(reports, "experiments/foo/1.0.0.json"), "{ not a manifest }");
   await validateRepository(fixture);
 });
 

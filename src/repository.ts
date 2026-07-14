@@ -2,7 +2,7 @@ import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { join, posix, relative, resolve, sep } from "node:path";
 import { manifestDigest, sha256, treeDigest } from "./digests.js";
 import { isManifestPath, loadManifest } from "./load.js";
-import { kindFromPath, SchemaValidator } from "./schema.js";
+import { kindFromRepositoryPath, SchemaValidator } from "./schema.js";
 import { Diagnostic, ValidationError } from "./types.js";
 
 type ObjectValue = Record<string, unknown>;
@@ -75,7 +75,7 @@ async function canonicalArtifactDirectories(tasksDirectory: string): Promise<str
 }
 
 function insideExamples(file: string): boolean { return file.includes(`${sep}spec${sep}examples${sep}`); }
-function manifestOwnedPath(file: string): boolean { const parts = file.replace(/^\.\//, "").split(/[\\/]/); return parts[0] === "suites" || parts[0] === "experiments"; }
+function manifestOwnedPath(file: string): boolean { const parts = file.replace(/^\.\//, "").split(/[\\/]/); return parts[0] === "tasks" || parts[0] === "suites" || parts[0] === "experiments"; }
 function identity(manifest: Manifest): string | undefined {
   if (["task", "suite", "experiment"].includes(manifest.kind)) return `${asString(manifest.value.id)}@${asString(manifest.value.version)}`;
   if (manifest.kind === "campaign") return asString(manifest.value.campaign_id);
@@ -94,7 +94,7 @@ export async function validateRepository(rootInput: string): Promise<void> {
   for (const directory of ["suites", "experiments", "results"]) await walk(join(root, directory), repoFiles);
   for (const file of [...exampleFiles, ...repoFiles].sort()) {
     const repositoryPath = relative(root, file).split(sep).join("/");
-    const kind = kindFromPath(repositoryPath);
+    const kind = kindFromRepositoryPath(repositoryPath);
     if (!kind) { if (manifestOwnedPath(repositoryPath)) diagnostics.push({ file, code: "semantic/unknown-manifest", message: "cannot infer manifest schema kind from a manifest-owned path" }); continue; }
     if (repositoryPath.startsWith("tasks/")) {
       const fileType = await lstat(file);
