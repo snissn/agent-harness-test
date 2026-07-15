@@ -1,8 +1,8 @@
 # Validation and CI
 
 CI pins Node `24.12.0` in `.github/workflows/validation.yml`. `package.json`
-declares npm `11.7.0` through `packageManager`, while `engines` constrains local
-installs to Node 24 and npm 11. From a fresh checkout, run:
+declares npm `11.7.0` through `packageManager` and supported Node 24/npm 11
+ranges through `engines`. From a fresh checkout, run:
 
 ```sh
 npm ci
