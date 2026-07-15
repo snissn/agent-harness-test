@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { DeterministicRunner, runWithHardTimeout, type TerminalReason } from "../src/runner.js";
+import { DeterministicRunner, FakeHarnessAdapter, runWithHardTimeout, type TerminalReason } from "../src/runner.js";
 import { sha256, treeDigest } from "../src/digests.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -69,6 +69,7 @@ test("schema-enabled evaluator and adapter failures remain structured and never 
       assert.equal(result.evaluation.status, "error");
       assert.equal(result.evaluation.eligible_for_quality_aggregate, false);
       assert.ok(result.errors.some((e: any) => e.phase === "evaluation"));
+      assert.equal(JSON.parse(await readFile(join(resultRoot(f), "evaluator.json"), "utf8")).status, "error");
     } finally { await rm(f.dir, { recursive: true, force: true }); }
   }
   const rejected = await fixture("run-rejected");
@@ -85,6 +86,12 @@ test("schema-enabled evaluator and adapter failures remain structured and never 
     assert.deepEqual(result.artifacts.map((a: any) => a.kind), ["request", "native-events", "stdout", "stderr", "final-message"]);
     assert.ok(await readFile(join(resultRoot(missing), "run.json")));
   } finally { await rm(missing.dir, { recursive: true, force: true }); }
+  const unsafeExperiment = await fixture("run-safe-experiment");
+  try {
+    unsafeExperiment.request.experiment.id = "../escape";
+    await assert.rejects(run(unsafeExperiment, "agent_completed", { schemaDirectory: undefined }), /single safe path components/);
+    assert.equal(await lstat(join(unsafeExperiment.dir, "results")).then(() => true).catch(() => false), false);
+  } finally { await rm(unsafeExperiment.dir, { recursive: true, force: true }); }
 });
 
 test("hard timeout snapshots partial capture and clears timers without late mutation", async () => {
@@ -120,6 +127,17 @@ test("hard timeout snapshots partial capture and clears timers without late muta
     await runWithHardTimeout(adapter, { workspace: ".", prompt: "", request: {}, signal: new AbortController().signal }, 100, { set: () => 1, clear: () => { cleared += 1; } }).catch(() => undefined);
     assert.equal(cleared, 1);
   }
+  const terminationNeverSettles = await Promise.race([
+    runWithHardTimeout({ run: async () => await new Promise<any>(() => undefined), terminate: async () => await new Promise<void>(() => undefined) }, { workspace: ".", prompt: "", request: {}, signal: new AbortController().signal }, 0),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout was blocked by terminate")), 50)),
+  ]);
+  assert.equal(terminationNeverSettles.terminal, "wall_time_exhausted");
+  assert.equal((terminationNeverSettles.events?.[0] as any).termination_requested, true);
+  const fakeWorkspace = await mkdtemp(join(tmpdir(), "aht-fake-timeout-"));
+  try {
+    const fakeTimeout = await runWithHardTimeout(new FakeHarnessAdapter("timeout"), { workspace: fakeWorkspace, prompt: "", request: {}, signal: new AbortController().signal }, 5);
+    assert.equal(fakeTimeout.terminal, "wall_time_exhausted");
+  } finally { await rm(fakeWorkspace, { recursive: true, force: true }); }
 });
 
 test("whole-attempt secret redaction and workspace tree metadata are durable", async () => {
@@ -127,6 +145,7 @@ test("whole-attempt secret redaction and workspace tree metadata are durable", a
   const secret = "RUNTIME_SECRET_SENTINEL";
   try {
     await writeFile(join(f.state, "tool"), "#!/bin/sh\n"); await chmod(join(f.state, "tool"), 0o755); await symlink("tool", join(f.state, "tool-link"));
+    await mkdir(join(f.state, ".git")); await writeFile(join(f.state, ".git", "internal"), "not evidence\n");
     f.request.workspace.initial_tree_digest = await treeDigest(f.state); f.request.task.initial_tree_digest = f.request.workspace.initial_tree_digest;
     const result = await new DeterministicRunner().run(f.request, {
       root: f.dir, stateSource: f.state, prompt: "p", schemaDirectory: schemas, runnerGitCommit: "a11c51473cd5b41dd6bf32ba3ee72de16a8bf303", runtimeRedactions: [secret],
@@ -139,6 +158,7 @@ test("whole-attempt secret redaction and workspace tree metadata are durable", a
     const entries = JSON.parse(await readFile(join(resultRoot(f), "workspace-tree.json"), "utf8")).entries;
     assert.deepEqual(entries.find((entry: any) => entry.path === "tool"), { type: "file", path: "tool", mode: "executable", bytes: 10, digest: `sha256:${sha256("#!/bin/sh\n")}` });
     assert.deepEqual(entries.find((entry: any) => entry.path === "tool-link"), { type: "symlink", path: "tool-link", target: "tool" });
+    assert.equal(entries.some((entry: any) => String(entry.path).startsWith(".git")), false);
   } finally { await rm(f.dir, { recursive: true, force: true }); }
 });
 

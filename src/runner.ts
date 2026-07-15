@@ -149,25 +149,31 @@ export async function runWithHardTimeout(
       timer.clear(timerHandle);
     }
   };
-  const run = adapter.run({ ...input, signal: controller.signal });
+  // Invoke through a promise boundary so a synchronous adapter throw also
+  // participates in the race and cannot escape before timer cleanup is wired.
+  const run = Promise.resolve().then(() => adapter.run({ ...input, signal: controller.signal }));
   const timedOut = new Promise<HarnessResult>((resolve) => {
     const fire = async () => {
       if (settled) return;
       clearTimer();
       controller.abort();
-      await adapter.terminate?.("wall_time_exhausted");
       if (!settled) {
         settled = true;
         resolve({
           terminal: "wall_time_exhausted",
-          events: [{ type: "runner.timeout", enforcement: "terminate" }],
+          events: [{ type: "runner.timeout", enforcement: "terminate", termination_requested: true }],
           stderr: "hard wall time exhausted",
           exitCode: null,
         });
       }
+      // Termination is best-effort evidence collection, never a condition for
+      // publishing the hard timeout. A rejection is intentionally observed.
+      void Promise.resolve()
+        .then(() => adapter.terminate?.("wall_time_exhausted"))
+        .catch(() => undefined);
     };
     timerHandle = timer.set(timeoutMs, () => void fire());
-    run.finally(clearTimer).catch(() => undefined);
+    run.then(clearTimer, clearTimer);
   });
   try {
     const result = await Promise.race([run, timedOut]);
@@ -210,10 +216,7 @@ export class FakeHarnessAdapter implements ControlledHarnessAdapter {
       join(input.workspace, "fake-harness.txt"),
       `scenario=${this.scenario}\n`,
     );
-    if (this.scenario === "timeout")
-      await new Promise<void>((resolve) =>
-        setTimeout(resolve, Math.max(this.delayMs, 50)),
-      );
+    if (this.scenario === "timeout") await new Promise<void>(() => undefined);
     if (this.delayMs)
       await new Promise<void>((resolve) => {
         const h = setTimeout(resolve, this.delayMs);
@@ -324,6 +327,7 @@ async function treeManifest(
   const output: Array<Record<string, unknown>> = [];
   async function walk(dir: string): Promise<void> {
     for (const entry of await readdir(dir, { withFileTypes: true })) {
+      if (entry.name === ".git") continue;
       const path = join(dir, entry.name);
       const name = relative(root, path).replaceAll("\\", "/");
       if (entry.isDirectory()) {
@@ -553,10 +557,14 @@ export class DeterministicRunner {
       value !== "." &&
       value !== ".." &&
       !/[\\/\0]/.test(value);
-    if (!safePart(request.campaign_id) || !safePart(request.run_id))
+    if (
+      !safePart((request.experiment as any)?.id) ||
+      !safePart(request.campaign_id) ||
+      !safePart(request.run_id)
+    )
       throw new RunnerError(
         "runner.unsafe-attempt-path",
-        "campaign and run IDs must be single safe path components",
+        "experiment, campaign, and run IDs must be single safe path components",
       );
     const root = join(
       o.root,
@@ -753,10 +761,6 @@ export class DeterministicRunner {
           o.evaluator.evaluate({ workspace: protectedWorkspace, request }),
         );
         schema?.validate("evaluation", raw);
-        await write("evaluator_result", JSON.stringify(raw));
-        const evaluatorBytes = await readFile(
-          join(root, target.evaluator_result!),
-        );
         evaluation = evaluationSummary(
           raw,
           o.scoringPolicy ?? { checks: o.taskChecks },
@@ -764,6 +768,21 @@ export class DeterministicRunner {
           request.attempt as Record<string, unknown>,
           manifestDigest(raw),
         );
+        if (evaluation.status === "error")
+          await write(
+            "evaluator_result",
+            JSON.stringify({
+              schema_version: "0.2.0",
+              task_id: (request.task as any).id,
+              task_version: (request.task as any).version,
+              status: "error",
+              started_at: new Date().toISOString(),
+              finished_at: new Date().toISOString(),
+              duration_ms: 0,
+              error_message: String(evaluation.reason),
+            }),
+          );
+        else await write("evaluator_result", JSON.stringify(raw));
         if (evaluation.status === "error")
           error(
             "evaluation",
