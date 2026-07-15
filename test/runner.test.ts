@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -14,6 +14,7 @@ import {
   runWithHardTimeout,
 } from "../src/runner.js";
 import { sha256, treeDigest } from "../src/digests.js";
+import { RecordedCaptureAdapter } from "../src/offline-replay.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 process.env.RUNNER_GIT_COMMIT = "cf40646";
@@ -159,6 +160,54 @@ test("M1-M3 request, fake capture, evaluation and immutable result", async () =>
   } finally {
     await rm(f.dir, { recursive: true, force: true });
   }
+});
+test("offline replay excludes evaluator fixtures and redacts local event paths", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "aht-replay-"));
+  try {
+    const capture = join(dir, "capture"), workspace = join(dir, "workspace");
+    await mkdir(capture);
+    await Promise.all([
+      writeFile(join(capture, "text_report.py"), "done\n"),
+      writeFile(join(capture, "sample.txt"), "sample\n"),
+      writeFile(join(capture, "filter.txt"), "filter\n"),
+      writeFile(join(capture, "stderr.txt"), ""),
+      writeFile(join(capture, "exit-code"), "0"),
+      writeFile(join(capture, "evaluator.json"), "{}"),
+      writeFile(join(capture, "native.jsonl"), `${JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "at /tmp/local-work" } })}\n${JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 2, reasoning_output_tokens: 1 } })}\n`),
+    ]);
+    const result = await new RecordedCaptureAdapter(capture).run({ workspace, prompt: "", request: {}, signal: new AbortController().signal });
+    assert.equal(result.finalMessage?.includes("/tmp"), false);
+    assert.deepEqual(await (await import("node:fs/promises")).readdir(workspace), ["text_report.py"]);
+    assert.equal((result.events![0] as any).item.text.includes("/tmp"), false);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+test("contaminated offline captures cannot be quality eligible or scored", async () => {
+  const f = await fixture();
+  try {
+    const result = await new DeterministicRunner().run(f.request, {
+      root: f.dir, stateSource: f.state, prompt: "p",
+      adapter: { run: async () => ({ terminal: "environment_error", exitCode: 0 }) },
+      evaluator: f.evaluator, taskChecks: [{ id: "core", weight: 1, required: true }],
+      schemaDirectory: join(root, "spec/schemas"),
+      skipEvaluationReason: "workspace evidence contaminated by evaluator fixtures",
+      warnings: ["capture contamination"],
+    });
+    assert.equal(result.terminal.reason, "environment_error");
+    assert.deepEqual(result.evaluation, { status: "not-run", reason: "workspace evidence contaminated by evaluator fixtures", eligible_for_quality_aggregate: false });
+    assert.deepEqual(result.warnings, ["capture contamination"]);
+    await assert.rejects(lstat(join(f.dir, "results/fake-experiment/fake-campaign/runs/run-success/.evaluator-workspace")));
+  } finally { await rm(f.dir, { recursive: true, force: true }); }
+});
+test("runner can record unavailable timing without replay milliseconds", async () => {
+  const f = await fixture();
+  try {
+    const result = await new DeterministicRunner().run(f.request, {
+      root: f.dir, stateSource: f.state, prompt: "p", adapter: f.adapter, evaluator: f.evaluator,
+      taskChecks: [{ id: "core", weight: 1, required: true }], schemaDirectory: join(root, "spec/schemas"),
+      timing: { status: "unavailable", source: "offline-replay", unavailable_reason: "no captured monotonic clock" },
+    });
+    assert.deepEqual(result.metrics.timing, { status: "unavailable", source: "offline-replay", unavailable_reason: "no captured monotonic clock" });
+  } finally { await rm(f.dir, { recursive: true, force: true }); }
 });
 test("M2 timeout preserves partial work and still evaluates it", async () => {
   const f = await fixture("timeout");

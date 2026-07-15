@@ -1,0 +1,13 @@
+Implemented [text_report.py]([REDACTED]).
+
+It now:
+
+- Ignores blank lines.
+- Extracts maximal ASCII-letter words case-insensitively.
+- Supports prefix filtering.
+- Sorts deterministically by count, then word.
+- Validates positive limits.
+- Handles unreadable and invalid UTF-8 input.
+- Emits compact JSON.
+
+Validation passed, including compilation, direct assertions, CLI behavior, and error cases. No repository tests were present.

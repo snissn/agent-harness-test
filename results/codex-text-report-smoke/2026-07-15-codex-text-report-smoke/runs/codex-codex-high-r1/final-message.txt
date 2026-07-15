@@ -1,0 +1,11 @@
+Implemented [text_report.py]([REDACTED]).
+
+It now supports:
+
+- Blank-line exclusion and ASCII word extraction
+- Case-insensitive counting and prefix filtering
+- Deterministic frequency/alphabetical sorting
+- Positive `--limit` validation
+- Concise file and UTF-8 decoding errors
+
+All evaluator checks and additional local edge-case tests pass.

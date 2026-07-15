@@ -520,6 +520,9 @@ function evaluationSummary(
       id: receivedCheck.id,
       score: receivedCheck.score,
       passed: receivedCheck.passed,
+      ...(typeof receivedCheck.message === "string"
+        ? { message: receivedCheck.message }
+        : {}),
       weight: c.weight,
       required: c.required,
     };
@@ -572,6 +575,11 @@ export interface RunOptions {
   timer?: Timer;
   runtimeRedactions?: string[];
   runnerGitCommit?: string;
+  /** Explicitly substitute timing when replay cannot observe live execution. */
+  timing?: Record<string, unknown>;
+  /** Do not score an attempt whose retained workspace is known untrustworthy. */
+  skipEvaluationReason?: string;
+  warnings?: string[];
 }
 export function deriveDiagnosticAttempt(
   parentRequest: Record<string, any>,
@@ -710,7 +718,11 @@ export class DeterministicRunner {
     let final = post;
     let initialBytes = 0;
     let materializationVerified = false;
-    let evaluation: Record<string, unknown> = {
+    let evaluation: Record<string, unknown> = o.skipEvaluationReason ? {
+      status: "not-run",
+      reason: o.skipEvaluationReason,
+      eligible_for_quality_aggregate: false,
+    } : {
       status: "not-run",
       reason: "no salvageable workspace",
       eligible_for_quality_aggregate: false,
@@ -824,7 +836,7 @@ export class DeterministicRunner {
       );
     }
     const protectedWorkspace = join(root, ".evaluator-workspace");
-    if (materializationVerified && (await exists(activeWorkspace)))
+    if (materializationVerified && !o.skipEvaluationReason && (await exists(activeWorkspace)))
       await cp(activeWorkspace, protectedWorkspace, {
         recursive: true,
         errorOnExist: true,
@@ -869,7 +881,7 @@ export class DeterministicRunner {
         "workspace_patch",
         diffManifest(initialManifest, finalManifest),
       );
-      if (materializationVerified) {
+      if (materializationVerified && !o.skipEvaluationReason) {
         try {
         const raw = await phase("evaluation", () =>
           o.evaluator.evaluate({ workspace: protectedWorkspace, request }),
@@ -1024,7 +1036,9 @@ export class DeterministicRunner {
         final_tree_digest: final,
       },
       metrics: {
-        timing: {
+        timing: o.timing ?? {
+          status: "complete",
+          source: "runner-monotonic",
           clock_source: "monotonic",
           wall_time_ms: Math.round(performance.now() - started),
           phases_ms: phases,
@@ -1060,7 +1074,7 @@ export class DeterministicRunner {
       evaluation,
       errors,
       artifacts,
-      warnings: [],
+      warnings: o.warnings ?? [],
     };
     schema?.validate("run-result", result);
     await phase("finalization", () =>
