@@ -26,6 +26,7 @@ export interface RebuildResult { database: string; data: string; html: string; i
 /** Rebuilds a disposable projection. Source artifacts are never modified. */
 export async function rebuildReport(rootInput: string, outputInput = "reports"): Promise<RebuildResult> {
   const root = resolve(rootInput), output = resolve(root, outputInput), results = join(root, "results");
+  if (output === root || output === results || !output.startsWith(`${root}${sep}`)) throw new Error("report output must be a disposable directory below repository root");
   await rm(output, { recursive: true, force: true }); await mkdir(output, { recursive: true });
   const database = join(output, "index.sqlite"), db = new DatabaseSync(database);
   db.exec(`PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;
@@ -34,7 +35,6 @@ CREATE TABLE runs (id TEXT PRIMARY KEY, campaign_id TEXT, configuration_id TEXT,
 CREATE TABLE ingestion_errors (source TEXT, code TEXT, message TEXT);
 CREATE TABLE lineage (run_id TEXT, parent_run_id TEXT, attempt_mode TEXT);`);
   const validator = await SchemaValidator.create(join(root, "spec/schemas"));
-  if (output === root || output === results || !output.startsWith(`${root}${sep}`)) throw new Error("report output must be a disposable directory below repository root");
   const campaignFiles = (await files(results)).filter(path => basename(path) === "campaign.json").sort();
   db.exec("BEGIN IMMEDIATE");
   const errors: Json[] = [], rows: Json[] = [];

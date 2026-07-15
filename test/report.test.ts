@@ -40,3 +40,11 @@ test("corrupt source artifact is quarantined without changing valid aggregate ro
     assert.match(data.ingestion_errors[0].message, /artifact digest mismatch/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("report refuses destructive output paths", async () => {
+  const root = await fixture();
+  try {
+    await assert.rejects(rebuildReport(root, "."), /disposable directory/);
+    await assert.rejects(rebuildReport(root, "results"), /disposable directory/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
