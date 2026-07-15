@@ -2,16 +2,16 @@
   "schema_version": "0.2.0",
   "id": "python-text-report",
   "version": "1.0.0",
-  "status": "draft",
+  "status": "released",
   "title": "Complete a deterministic text report CLI",
   "summary": "Build a dependency-free Python command that summarizes newline-delimited text input.",
   "category": "build",
   "tags": ["cli", "python", "text"],
   "languages": ["Python"],
-  "prompt": {"path": "tasks/python-text-report/1.0.0/prompt.md"},
+  "prompt": {"path": "tasks/python-text-report/1.0.0/prompt.md", "digest": "sha256:3450b7930de33ed7d237166ecbe0337f86d456524a5746e4300c590e5a0d7291"},
   "problem_state": {
     "source": {"kind": "directory", "path": "tasks/python-text-report/1.0.0/state"},
-    "digest_algorithm": "tree-sha256-v1"
+    "digest_algorithm": "tree-sha256-v1", "expected_tree_digest": "tree-sha256-v1:90667322b1b4a7a98c017a2d5d1f0d7676d2746a4599d71adf0391ee40ea7258"
   },
   "environment": {
     "runtime": {"kind": "host", "platform": "darwin-arm64"},
@@ -25,7 +25,7 @@
     "path": "tasks/python-text-report/1.0.0/evaluator",
     "command": ["python3", "/evaluator/evaluate.py", "/workspace"],
     "timeout_seconds": 30,
-    "result_file": "evaluator.json"
+    "result_file": "evaluator.json", "digest": "tree-sha256-v1:76247f28b811ca9dad3cf5bf5a9f31c59b7570bb30793b9ea89e55bad32199eb"
   },
   "scoring": {
     "checks": [
@@ -40,5 +40,6 @@
     "wall_time_seconds": {"value": 480, "enforcement": "hard"},
     "total_tokens": {"value": 80000, "enforcement": "observe-only"},
     "tool_calls": {"value": 100, "enforcement": "observe-only"}
-  }
+  },
+  "calibration": {"evidence_path": "tasks/python-text-report/1.0.0/calibration.json", "evidence_digest": "sha256:cb3eb09d24b8c2bd28b11811e688b2bf70d240145d308fbd318b34f322d77948", "reference_passes": true, "untouched_fails": true, "partial_solution_checked": true, "deterministic_runs": 3}
 }
