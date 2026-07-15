@@ -49,8 +49,9 @@ npm run report:rebuild
 open reports/index.html
 ```
 
-This revalidates each campaign/run schema, campaign run digest, and retained
-artifact digest while walking source artifacts in stable order. It writes
+This revalidates each campaign/run/request/evaluator schema, cross-file identity,
+campaign run digest, cached campaign summary, and retained artifact digest and
+byte count while walking source artifacts in stable order. It writes
 `reports/index.sqlite`, `reports/report-data.json`, and a self-contained
 `reports/index.html`; deleting `reports/` and rerunning is safe. Invalid source
 records are quarantined in `report-data.json` and `ingestion_errors` rather
@@ -59,6 +60,10 @@ denominators include only initial attempts eligible for quality aggregation;
 operational completion includes all initial attempts. Retry/resume attempts,
 unavailable telemetry, local/non-canonical topology, unsnapshotted model IDs,
 and one-repetition smoke data are visibly qualified rather than normalized.
+Historical points connect only within an exact suite/task/harness/model/effort/
+topology identity; incompatible identities remain separate series. Campaign
+identity is scoped by experiment, so distinct experiments may reuse a local
+campaign ID without colliding in the projection.
 
 No provider credentials are needed to rebuild or open the report.
 
