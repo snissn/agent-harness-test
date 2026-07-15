@@ -106,8 +106,13 @@ async function makeScorable(root: string, runId: string, score: number): Promise
   const medium = await readJson(runPath(root, "codex-codex-medium-r1"));
   const evaluatorSource = join(root, campaignRelative, "runs/codex-codex-medium-r1/evaluator.json");
   const evaluatorPath = join(root, campaignRelative, `runs/${runId}/evaluator.json`);
-  if (runId !== "codex-codex-medium-r1") await cp(evaluatorSource, evaluatorPath);
+  if (runId !== "codex-codex-medium-r1") {
+    try { await readFile(evaluatorPath); }
+    catch { await cp(evaluatorSource, evaluatorPath); }
+  }
   const evaluator = await readJson(evaluatorPath);
+  evaluator.task_id = run.task.id;
+  evaluator.task_version = run.task.version;
   run.terminal = { reason: "agent_completed", attribution: "agent", operational_success: true, exit_code: 0 };
   run.errors = [];
   for (const check of evaluator.checks) { check.score = score; check.passed = score >= 0.85; }
@@ -119,6 +124,93 @@ async function makeScorable(root: string, runId: string, score: number): Promise
   if (evaluatorArtifact) Object.assign(evaluatorArtifact, { digest: `sha256:${sha256(content)}`, bytes: content.byteLength });
   else run.artifacts.push({ kind: "evaluator-result", path: `runs/${runId}/evaluator.json`, digest: `sha256:${sha256(content)}`, media_type: "application/json", bytes: content.byteLength });
   await restampRun(root, runId, run);
+}
+
+async function addWeightedComparisonTaskPair(root: string): Promise<{ medium: string; high: string }> {
+  const alternateTaskId = "python-text-report-weighted";
+  const alternateTaskDirectory = join(root, "tasks", alternateTaskId, "1.0.0");
+  await cp(join(root, "tasks/python-text-report/1.0.0"), alternateTaskDirectory, { recursive: true });
+  const taskPath = join(alternateTaskDirectory, "task.json");
+  const task = await readJson(taskPath);
+  task.id = alternateTaskId;
+  task.title = "Weighted comparison fixture";
+  task.prompt.path = `tasks/${alternateTaskId}/1.0.0/prompt.md`;
+  task.problem_state.source.path = `tasks/${alternateTaskId}/1.0.0/state`;
+  task.evaluator.path = `tasks/${alternateTaskId}/1.0.0/evaluator`;
+  task.calibration.evidence_path = `tasks/${alternateTaskId}/1.0.0/calibration.json`;
+  await writeJson(taskPath, task);
+  const taskReference = { id: task.id, version: task.version, spec_path: `tasks/${alternateTaskId}/1.0.0/task.json`, spec_digest: manifestDigest(task), prompt_digest: task.prompt.digest, initial_tree_digest: task.problem_state.expected_tree_digest, evaluator_digest: task.evaluator.digest };
+
+  const suitePath = join(root, "suites/first-codex-slice/1.0.0.json");
+  const suite = await readJson(suitePath);
+  suite.tasks.push({ id: task.id, version: task.version, spec_path: taskReference.spec_path, spec_digest: taskReference.spec_digest, weight: 3, anchor: false });
+  await writeJson(suitePath, suite);
+  const suiteReference = { id: suite.id, version: suite.version, spec_path: "suites/first-codex-slice/1.0.0.json", spec_digest: manifestDigest(suite) };
+
+  const experimentPath = join(root, "experiments", experimentId, "1.0.0.json");
+  const experiment = await readJson(experimentPath);
+  experiment.suite = suiteReference;
+  experiment.reporting.comparisons = [{ id: "weighted", baseline_configuration_id: "codex-high", candidate_configuration_ids: ["codex-medium"], gates: [] }];
+  await writeJson(experimentPath, experiment);
+  const experimentReference = { id: experiment.id, version: experiment.version, spec_path: `experiments/${experimentId}/1.0.0.json`, spec_digest: manifestDigest(experiment) };
+
+  const campaign = await readJson(campaignPath(root));
+  campaign.suite = suiteReference;
+  campaign.experiment = experimentReference;
+  campaign.planned_run_count = 4;
+  for (const reference of campaign.runs) {
+    const run = await readJson(runPath(root, reference.run_id));
+    run.suite = suiteReference;
+    run.experiment = experimentReference;
+    const requestArtifact = run.artifacts.find((artifact: Json) => artifact.kind === "request");
+    const requestPath = join(root, campaignRelative, requestArtifact.path);
+    const request = await readJson(requestPath);
+    request.suite = suiteReference;
+    request.experiment = experimentReference;
+    request.configuration = experiment.configurations.find((configuration: Json) => configuration.id === run.configuration_id);
+    await writeJson(requestPath, request);
+    const requestContent = await readFile(requestPath);
+    requestArtifact.digest = `sha256:${sha256(requestContent)}`;
+    requestArtifact.bytes = requestContent.byteLength;
+    run.provenance.request_digest = manifestDigest(request);
+    await writeJson(runPath(root, run.run_id), run);
+    reference.digest = manifestDigest(run);
+  }
+
+  const clones = [
+    { source: "codex-codex-medium-r1", runId: "codex-codex-medium-weighted-r1", scheduleIndex: 2 },
+    { source: "codex-codex-high-r1", runId: "codex-codex-high-weighted-r1", scheduleIndex: 3 },
+  ];
+  for (const clone of clones) {
+    const sourceDirectory = join(root, campaignRelative, "runs", clone.source);
+    const targetDirectory = join(root, campaignRelative, "runs", clone.runId);
+    await cp(sourceDirectory, targetDirectory, { recursive: true });
+    const requestPath = join(targetDirectory, "request.json");
+    const request = JSON.parse((await readFile(requestPath, "utf8")).replaceAll(clone.source, clone.runId)) as Json;
+    request.run_id = clone.runId;
+    request.task = taskReference;
+    request.suite = suiteReference;
+    request.experiment = experimentReference;
+    request.schedule_index = clone.scheduleIndex;
+    request.configuration = experiment.configurations.find((configuration: Json) => configuration.id === request.configuration.id);
+    await writeJson(requestPath, request);
+    const requestContent = await readFile(requestPath);
+    const run = JSON.parse(JSON.stringify(await readJson(join(sourceDirectory, "run.json"))).replaceAll(clone.source, clone.runId)) as Json;
+    run.run_id = clone.runId;
+    run.task = taskReference;
+    run.suite = suiteReference;
+    run.experiment = experimentReference;
+    run.schedule_index = clone.scheduleIndex;
+    const requestArtifact = run.artifacts.find((artifact: Json) => artifact.kind === "request");
+    requestArtifact.digest = `sha256:${sha256(requestContent)}`;
+    requestArtifact.bytes = requestContent.byteLength;
+    run.provenance.request_digest = manifestDigest(request);
+    await writeJson(join(targetDirectory, "run.json"), run);
+    campaign.runs.push({ run_id: clone.runId, path: `runs/${clone.runId}/run.json`, digest: manifestDigest(run) });
+  }
+  campaign.summary = { recorded_runs: 4, operational_successes: 2, quality_eligible_runs: 2, end_to_end_passes: 2, invalid_runs: 2 };
+  await writeJson(campaignPath(root), campaign);
+  return { medium: clones[0]!.runId, high: clones[1]!.runId };
 }
 
 async function addRetry(root: string): Promise<string> {
@@ -487,8 +579,27 @@ test("declared reverse-sorted baseline direction emits per-task deltas before ag
     assert.equal(comparison.candidate, "codex-medium");
     assert.equal(comparison.direction, "candidate-minus-baseline");
     assert.equal(comparison.paired_task_deltas[0].score_delta, 0.5);
+    assert.equal(comparison.paired_task_deltas[0].task_weight, 1);
     assert.equal(comparison.aggregate_score_delta, 0.5);
     assert.ok(text.indexOf('"paired_task_deltas"') < text.indexOf('"aggregate_score_delta"'));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("comparison aggregate averages repetitions per task before applying declared weights", async () => {
+  const root = await fixture();
+  try {
+    const weighted = await addWeightedComparisonTaskPair(root);
+    await makeScorable(root, "codex-codex-high-r1", 0.25);
+    await makeScorable(root, "codex-codex-medium-r1", 0.75);
+    await makeScorable(root, weighted.high, 0.75);
+    await makeScorable(root, weighted.medium, 0.25);
+    const data = await readJson((await rebuildReport(root)).data);
+    const comparison = data.comparisons[0];
+    assert.deepEqual(comparison.paired_task_deltas.map((item: Json) => [item.task, item.task_weight, item.score_delta]), [
+      ["python-text-report-weighted@1.0.0", 3, -0.5],
+      ["python-text-report@1.0.0", 1, 0.5],
+    ]);
+    assert.equal(comparison.aggregate_score_delta, -0.25);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -616,15 +727,16 @@ test("structured errors retain attribution/phase/code while secrets and host pat
   const root = await fixture();
   try {
     await mutateRun(root, "codex-codex-high-r1", run => {
-      run.errors = [{ occurred_at: run.observed_at, phase: "harness-startup", code: "harness.launch_failed", attribution: "harness", retryable: true, message: "SECRET_SENTINEL leaked from /Users/unrelated/private/token.txt" }];
+      run.errors = [{ occurred_at: run.observed_at, phase: "harness-startup", code: "harness.launch_failed", attribution: "harness", retryable: true, message: "SECRET_SENTINEL leaked from /Users/unrelated/private/token.txt /etc/shadow /root/.ssh/key /srv/service/config \\\\server\\share\\secret //host/share/secret; docs https://example.test/docs" }];
     });
     const result = await rebuildReport(root);
     const jsonText = await readFile(result.data, "utf8");
     const htmlText = await readFile(result.html, "utf8");
-    assert.doesNotMatch(`${jsonText}${htmlText}`, /SECRET_SENTINEL|\/Users\/unrelated|agent-harness-report-/);
+    assert.doesNotMatch(`${jsonText}${htmlText}`, /SECRET_SENTINEL|\/Users\/unrelated|\/etc\/shadow|\/root\/\.ssh|\/srv\/service|server\\share|\/\/host\/share|agent-harness-report-/);
     const data = JSON.parse(jsonText) as Json;
     assert.deepEqual(({ attribution: data.error_details[0].attribution, phase: data.error_details[0].phase, code: data.error_details[0].code }), { attribution: "harness", phase: "harness-startup", code: "harness.launch_failed" });
     assert.match(data.error_details[0].message, /\[REDACTED\].*\[ABSOLUTE_PATH\]/);
+    assert.match(data.error_details[0].message, /https:\/\/example\.test\/docs/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

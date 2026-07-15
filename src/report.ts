@@ -47,7 +47,7 @@ function redactString(value: string, root: string): string {
     .replaceAll(root, "[REPOSITORY]")
     .replaceAll(portable(root), "[REPOSITORY]")
     .replaceAll("SECRET_SENTINEL", "[REDACTED]")
-    .replace(/(?:[A-Za-z]:[\\/]|\/(?:Users|home|private|tmp|var|opt)\/)(?:[^\s"'<>]+[\\/]?)+/g, "[ABSOLUTE_PATH]");
+    .replace(/(?<![A-Za-z0-9_:\/\\])(?:[A-Za-z]:[\\/][^\s"'<>|]+|(?:\\\\|\/\/)[^\\/\s"'<>|]+[\\/][^\s"'<>|]+(?:[\\/][^\s"'<>|]+)*|\/[^\s"'<>/]+(?:\/[^\s"'<>/]*)*)/g, "[ABSOLUTE_PATH]");
 }
 function sanitize(value: unknown, root: string): unknown {
   if (typeof value === "string") return redactString(value, root);
@@ -436,10 +436,10 @@ CREATE TABLE lineage (campaign_key TEXT, run_id TEXT, parent_run_id TEXT, attemp
       const baselines = initial.filter(row => row.experiment === experimentKey && row.configuration_id === plan.baseline_configuration_id && row.evaluation.eligible_for_quality_aggregate === true);
       for (const baseline of baselines) {
         const match = initial.find(row => row.experiment === experimentKey && row.campaign_key === baseline.campaign_key && row.configuration_id === candidate && row.task === baseline.task && row.repetition === baseline.repetition && row.evaluation.eligible_for_quality_aggregate === true);
-        if (match) paired.push({ campaign_key: baseline.campaign_key, observed_at: baseline.observed_at, task: baseline.task, repetition: baseline.repetition, baseline: plan.baseline_configuration_id, candidate, baseline_score: baseline.evaluation.artifact_quality_score, candidate_score: match.evaluation.artifact_quality_score, score_delta: match.evaluation.artifact_quality_score - baseline.evaluation.artifact_quality_score });
+        if (match) paired.push({ campaign_key: baseline.campaign_key, observed_at: baseline.observed_at, task: baseline.task, task_weight: baseline.task_weight, repetition: baseline.repetition, baseline: plan.baseline_configuration_id, candidate, baseline_score: baseline.evaluation.artifact_quality_score, candidate_score: match.evaluation.artifact_quality_score, score_delta: match.evaluation.artifact_quality_score - baseline.evaluation.artifact_quality_score });
       }
       paired.sort((left, right) => left.observed_at.localeCompare(right.observed_at) || left.campaign_key.localeCompare(right.campaign_key) || left.task.localeCompare(right.task) || left.repetition - right.repetition);
-      comparisons.push({ id: plan.id, experiment: experimentKey, baseline: plan.baseline_configuration_id, candidate, direction: "candidate-minus-baseline", paired_task_deltas: paired, aggregate_score_delta: paired.length ? paired.reduce((total, item) => total + item.score_delta, 0) / paired.length : null, qualification: paired.length ? "declared candidate-minus-baseline paired task deltas; smoke only when sourced from one repetition" : "declared comparison has no scorable paired task observations" });
+      comparisons.push({ id: plan.id, experiment: experimentKey, baseline: plan.baseline_configuration_id, candidate, direction: "candidate-minus-baseline", paired_task_deltas: paired, aggregate_score_delta: weightedSuiteHeadline(paired.map(item => ({ task: item.task, score: item.score_delta, weight: item.task_weight }))), qualification: paired.length ? "declared candidate-minus-baseline paired task deltas; smoke only when sourced from one repetition" : "declared comparison has no scorable paired task observations" });
     }
   }
 
