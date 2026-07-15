@@ -2,6 +2,15 @@ import { cp, mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { ControlledHarnessAdapter, HarnessResult } from "./runner.js";
 
+function redactLocalPaths(value: unknown): unknown {
+  if (typeof value === "string")
+    return value.replace(/\/(?:private\/)?tmp\/[A-Za-z0-9._/-]+|\/Users\/[A-Za-z0-9._/-]+/g, "[REDACTED]");
+  if (Array.isArray(value)) return value.map(redactLocalPaths);
+  if (value && typeof value === "object")
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, redactLocalPaths(item)]));
+  return value;
+}
+
 /**
  * Replays a retained, completed capture without starting a provider process.
  * The capture directory is deliberately supplied by the operator and is never
@@ -28,7 +37,7 @@ export class RecordedCaptureAdapter implements ControlledHarnessAdapter {
     const events = (await readFile(join(this.captureDirectory, "native.jsonl"), "utf8"))
       .split(/\r?\n/)
       .filter(Boolean)
-      .map((line) => JSON.parse(line));
+      .map((line) => redactLocalPaths(JSON.parse(line)));
     const terminal = events.findLast(
       (event) => (event as Record<string, unknown>).type === "turn.completed",
     ) as Record<string, unknown> | undefined;
@@ -39,7 +48,7 @@ export class RecordedCaptureAdapter implements ControlledHarnessAdapter {
         && item && typeof item === "object"
         && (item as Record<string, unknown>).type === "agent_message";
     }) as { item: { text?: unknown } } | undefined;
-    const finalMessage = typeof final?.item.text === "string" ? final.item.text : undefined;
+    const finalMessage = typeof final?.item.text === "string" ? redactLocalPaths(final.item.text) as string : undefined;
     return {
       terminal: "agent_completed",
       events,
