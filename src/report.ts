@@ -90,6 +90,49 @@ export function weightedSuiteHeadline(observations: Array<{ task: string; score:
   return taskScores.reduce((total, task) => total + task.weight * (task.scores.reduce((sum, score) => sum + score, 0) / task.scores.length), 0) / totalWeight;
 }
 
+function verifyEvaluationSummary(task: Json, evaluator: Json, run: Json): void {
+  const summary = run.evaluation ?? {};
+  if (evaluator.status !== summary.status) throw new SourceError("evaluation-mismatch", "run evaluation status does not match evaluator output");
+  if (evaluator.status !== "ok") {
+    if (summary.reason !== evaluator.error_message || summary.eligible_for_quality_aggregate !== false) throw new SourceError("evaluation-mismatch", "run evaluator-error summary does not match evaluator output");
+    return;
+  }
+
+  const declaredChecks = new Map<string, Json>(task.scoring.checks.map((check: Json): [string, Json] => [check.id, check]));
+  const evaluatorChecks = new Map<string, Json>(evaluator.checks.map((check: Json): [string, Json] => [check.id, check]));
+  const summaryChecks = new Map<string, Json>((summary.checks ?? []).map((check: Json): [string, Json] => [check.id, check]));
+  const exactCheckSet = declaredChecks.size === task.scoring.checks.length
+    && evaluatorChecks.size === evaluator.checks.length
+    && summaryChecks.size === (summary.checks ?? []).length
+    && declaredChecks.size === evaluatorChecks.size
+    && declaredChecks.size === summaryChecks.size
+    && [...declaredChecks.keys()].every(id => evaluatorChecks.has(id) && summaryChecks.has(id));
+  if (!exactCheckSet) throw new SourceError("evaluation-mismatch", "evaluation check IDs must be unique and exactly match task scoring");
+
+  let weightedScore = 0;
+  let totalWeight = 0;
+  let requiredPassed = true;
+  for (const [id, declared] of declaredChecks) {
+    const observed = evaluatorChecks.get(id)!;
+    const retained = summaryChecks.get(id)!;
+    if (retained.score !== observed.score || retained.passed !== observed.passed || retained.message !== observed.message || retained.weight !== declared.weight || retained.required !== declared.required) throw new SourceError("evaluation-mismatch", `run evaluation check does not match evaluator/task scoring: ${id}`);
+    weightedScore += observed.score * declared.weight;
+    totalWeight += declared.weight;
+    if (declared.required === true && observed.passed !== true) requiredPassed = false;
+  }
+  const quality = weightedScore / totalWeight;
+  const criteriaPassed = requiredPassed && quality >= task.scoring.pass_threshold;
+  const qualityEligible = run.attempt.mode === "initial" && ["agent_completed", "agent_failed", "wall_time_exhausted", "token_limit_exhausted", "tool_limit_exhausted"].includes(run.terminal.reason);
+  const agentCompletionRequired = task.scoring.require_agent_completion;
+  const endToEndPassed = criteriaPassed && qualityEligible && (!agentCompletionRequired || run.terminal.reason === "agent_completed");
+  const derivedMatches = Math.abs(summary.artifact_quality_score - quality) <= 1e-12
+    && summary.criteria_passed === criteriaPassed
+    && summary.agent_completion_required === agentCompletionRequired
+    && summary.end_to_end_passed === endToEndPassed
+    && summary.eligible_for_quality_aggregate === qualityEligible;
+  if (!derivedMatches) throw new SourceError("evaluation-mismatch", "run evaluation summary does not match evaluator output, task scoring, and terminal state");
+}
+
 export interface RebuildResult { database: string; data: string; html: string; invalid: number; runs: number; }
 
 /** Rebuilds a disposable projection. Source artifacts are never modified. */
@@ -188,6 +231,7 @@ CREATE TABLE lineage (campaign_key TEXT, run_id TEXT, parent_run_id TEXT, attemp
       for (const ref of campaign.runs) {
         const runPath = resolve(campaignDir, ref.path);
         let summaryRecorded = false;
+        db.exec("SAVEPOINT report_run");
         try {
           if (!within(campaignDir, runPath)) throw new SourceError("reference-invalid", "run reference escapes campaign");
           const run = await json(runPath);
@@ -246,7 +290,8 @@ CREATE TABLE lineage (campaign_key TEXT, run_id TEXT, parent_run_id TEXT, attemp
             if (artifact.kind === "evaluator-result") {
               const evaluation = JSON.parse(content.toString("utf8")) as Json;
               validateSchema(validator, "evaluation", evaluation, artifactPath, "schema-invalid-artifact");
-              if (evaluation.task_id !== run.task.id || evaluation.task_version !== run.task.version || manifestDigest(evaluation) !== run.evaluation.result_artifact_digest) throw new SourceError("reference-invalid", "evaluator artifact identity/digest does not match run");
+              if (evaluation.task_id !== run.task.id || evaluation.task_version !== run.task.version || (evaluation.status === "ok" && manifestDigest(evaluation) !== run.evaluation.result_artifact_digest)) throw new SourceError("reference-invalid", "evaluator artifact identity/digest does not match run");
+              verifyEvaluationSummary(task, evaluation, run);
               evaluatorSeen = true;
             }
           }
@@ -287,9 +332,12 @@ CREATE TABLE lineage (campaign_key TEXT, run_id TEXT, parent_run_id TEXT, attemp
           for (const check of run.evaluation?.checks ?? []) db.prepare("INSERT INTO checks VALUES (?, ?, ?, ?, ?, ?)").run(runKey, check.id, metric(check.score), check.passed === true ? 1 : 0, metric(check.weight), check.required === true ? 1 : 0);
           for (const artifact of run.artifacts ?? []) db.prepare("INSERT INTO artifacts VALUES (?, ?, ?, ?, ?)").run(runKey, artifact.kind, portable(artifact.path), artifact.digest, artifact.bytes);
           for (const error of run.errors ?? []) db.prepare("INSERT INTO structured_errors VALUES (?, ?, ?, ?, ?, ?, ?)").run(campaignKey, run.run_id, error.phase, error.code, error.attribution, error.retryable ? 1 : 0, redactString(error.message, root));
-          rows.push(row);
           if (run.attempt.number > 1) db.prepare("INSERT INTO lineage VALUES (?, ?, ?, ?)").run(campaignKey, run.run_id, run.attempt.parent_run_id ?? null, run.attempt.mode);
+          db.exec("RELEASE SAVEPOINT report_run");
+          rows.push(row);
         } catch (error) {
+          db.exec("ROLLBACK TO SAVEPOINT report_run");
+          db.exec("RELEASE SAVEPOINT report_run");
           if (!summaryRecorded) summaryVerifiable = false;
           const detail = sourceError(error, "invalid-run");
           errors.push({ source: portable(relative(root, runPath)), ...detail });

@@ -101,18 +101,24 @@ async function mutateExperiment(root: string, mutate: (experiment: Json) => void
   await writeJson(campaignPath(root), campaign);
 }
 
-async function makeHighScorable(root: string, score: number): Promise<void> {
-  const highId = "codex-codex-high-r1";
-  const run = await readJson(runPath(root, highId));
+async function makeScorable(root: string, runId: string, score: number): Promise<void> {
+  const run = await readJson(runPath(root, runId));
   const medium = await readJson(runPath(root, "codex-codex-medium-r1"));
   const evaluatorSource = join(root, campaignRelative, "runs/codex-codex-medium-r1/evaluator.json");
-  const evaluatorPath = join(root, campaignRelative, `runs/${highId}/evaluator.json`);
-  await cp(evaluatorSource, evaluatorPath);
+  const evaluatorPath = join(root, campaignRelative, `runs/${runId}/evaluator.json`);
+  if (runId !== "codex-codex-medium-r1") await cp(evaluatorSource, evaluatorPath);
   const evaluator = await readJson(evaluatorPath);
-  run.evaluation = { ...medium.evaluation, artifact_quality_score: score, end_to_end_passed: score >= 0.85, criteria_passed: score >= 0.85, result_artifact_digest: manifestDigest(evaluator) };
+  run.terminal = { reason: "agent_completed", attribution: "agent", operational_success: true, exit_code: 0 };
+  run.errors = [];
+  for (const check of evaluator.checks) { check.score = score; check.passed = score >= 0.85; }
+  await writeJson(evaluatorPath, evaluator);
+  const checks = medium.evaluation.checks.map((check: Json) => ({ ...check, score, passed: score >= 0.85 }));
+  run.evaluation = { ...medium.evaluation, checks, artifact_quality_score: score, end_to_end_passed: score >= 0.85, criteria_passed: score >= 0.85, result_artifact_digest: manifestDigest(evaluator) };
   const content = await readFile(evaluatorPath);
-  run.artifacts.push({ kind: "evaluator-result", path: `runs/${highId}/evaluator.json`, digest: `sha256:${sha256(content)}`, media_type: "application/json", bytes: content.byteLength });
-  await restampRun(root, highId, run);
+  const evaluatorArtifact = run.artifacts.find((artifact: Json) => artifact.kind === "evaluator-result");
+  if (evaluatorArtifact) Object.assign(evaluatorArtifact, { digest: `sha256:${sha256(content)}`, bytes: content.byteLength });
+  else run.artifacts.push({ kind: "evaluator-result", path: `runs/${runId}/evaluator.json`, digest: `sha256:${sha256(content)}`, media_type: "application/json", bytes: content.byteLength });
+  await restampRun(root, runId, run);
 }
 
 async function addRetry(root: string): Promise<string> {
@@ -130,6 +136,8 @@ async function addRetry(root: string): Promise<string> {
   const run = JSON.parse(JSON.stringify(await readJson(join(parentDirectory, "run.json"))).replaceAll(parentId, retryId)) as Json;
   run.run_id = retryId;
   run.attempt = request.attempt;
+  run.evaluation.eligible_for_quality_aggregate = false;
+  run.evaluation.end_to_end_passed = false;
   const requestArtifact = run.artifacts.find((artifact: Json) => artifact.kind === "request");
   requestArtifact.digest = `sha256:${sha256(requestContent)}`;
   requestArtifact.bytes = requestContent.byteLength;
@@ -139,8 +147,7 @@ async function addRetry(root: string): Promise<string> {
   campaign.runs.push({ run_id: retryId, path: `runs/${retryId}/run.json`, digest: manifestDigest(run) });
   campaign.summary.recorded_runs += 1;
   campaign.summary.operational_successes += 1;
-  campaign.summary.quality_eligible_runs += 1;
-  campaign.summary.end_to_end_passes += 1;
+  campaign.summary.invalid_runs += 1;
   await writeJson(campaignPath(root), campaign);
   return retryId;
 }
@@ -442,8 +449,8 @@ test("retry remains visible with parent lineage and is excluded from headline ag
 test("declared reverse-sorted baseline direction emits per-task deltas before aggregate", async () => {
   const root = await fixture();
   try {
-    await makeHighScorable(root, 0.25);
-    await mutateRun(root, "codex-codex-medium-r1", run => { run.evaluation.artifact_quality_score = 0.75; });
+    await makeScorable(root, "codex-codex-high-r1", 0.25);
+    await makeScorable(root, "codex-codex-medium-r1", 0.75);
     await mutateExperiment(root, experiment => { experiment.reporting.comparisons = [{ id: "reverse-sort", baseline_configuration_id: "codex-high", candidate_configuration_ids: ["codex-medium"], gates: [] }]; });
     const text = await readFile((await rebuildReport(root)).data, "utf8");
     const data = JSON.parse(text) as Json;
@@ -504,6 +511,35 @@ test("schema, digest, and reference corruption are quarantined with stable codes
       assert.equal(data.ingestion_errors[0].code, corruption === "schema" ? "schema-invalid-run" : corruption === "digest" ? "digest-mismatch" : "reference-invalid");
     } finally { await rm(root, { recursive: true, force: true }); }
   }
+});
+
+test("tampered run evaluation summaries are quarantined before aggregation", async () => {
+  const root = await fixture();
+  try {
+    await mutateRun(root, "codex-codex-medium-r1", run => { run.evaluation.artifact_quality_score = 0.25; });
+    const result = await rebuildReport(root);
+    const data = await readJson(result.data);
+    assert.equal(result.runs, 1);
+    assert.equal(result.invalid, 1);
+    assert.equal(data.ingestion_errors[0].code, "evaluation-mismatch");
+    assert.equal(data.configurations.some((configuration: Json) => configuration.configuration_id === "codex-medium"), false);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("late projection conflicts roll back the entire quarantined run", async () => {
+  const root = await fixture();
+  try {
+    await mutateRun(root, "codex-codex-high-r1", run => { run.artifacts.push({ ...run.artifacts[0] }); });
+    const result = await rebuildReport(root);
+    assert.equal(result.runs, 1);
+    assert.equal(result.invalid, 1);
+    const database = new DatabaseSync(result.database, { readOnly: true });
+    const projectedRuns = database.prepare("SELECT run_id FROM runs ORDER BY run_id").all();
+    const projectedArtifacts = database.prepare("SELECT DISTINCT run_key FROM artifacts ORDER BY run_key").all();
+    database.close();
+    assert.deepEqual(projectedRuns.map((row: any) => row.run_id), ["codex-codex-medium-r1"]);
+    assert.equal(projectedArtifacts.length, 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("structured errors retain attribution/phase/code while secrets and host paths are redacted", async () => {
