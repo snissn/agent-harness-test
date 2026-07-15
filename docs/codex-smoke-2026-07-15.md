@@ -24,3 +24,28 @@ reasoning output 1307; high input 150805 (cached 107776), output 3913,
 reasoning output 1983. Cost and resource telemetry were not reported and remain
 unavailable rather than zero. The raw redacted workspace copies and JSONL evidence were retained during the
 local campaign under `/tmp/issue4-medium` and `/tmp/issue4-high`.
+
+## Canonical offline finalization
+
+The checked-in campaign is
+`results/codex-text-report-smoke/2026-07-15-codex-text-report-smoke/`. It is
+created by replaying the retained final workspaces and JSONL captures through
+the deterministic runner; it does not start Codex, contact a provider, or claim
+that the runner launched the original two manual calls. Native events and local
+path strings are redacted in the immutable artifacts.
+
+The capture has no monotonic live wall duration or startup-latency samples.
+Consequently each canonical run marks timing unavailable rather than treating
+the short offline replay as agent execution time. The runner result timestamps
+identify canonical finalization, while the evaluator artifact retains its
+captured completion timestamp.
+
+To re-finalize from the retained captures (which are deliberately not checked
+in), provide the exact recorded Codex executable so its fingerprint is derived
+without running it:
+
+```sh
+RUNNER_GIT_COMMIT="$(git rev-parse HEAD)" \
+  npx tsx tools/finalize-codex-smoke.ts . /path/to/captures "$(command -v codex)"
+npm run validate
+```
