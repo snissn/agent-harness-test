@@ -6,7 +6,10 @@ import {
   readFile,
   readdir,
   readlink,
+  rename,
   rm,
+  symlink,
+  unlink,
   writeFile,
 } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
@@ -292,6 +295,57 @@ export function redact(value: string, secrets: string[]): string {
     value,
   );
 }
+function redactValue(value: unknown, secrets: string[]): unknown {
+  if (typeof value === "string") return redact(value, secrets);
+  if (Array.isArray(value)) return value.map((item) => redactValue(item, secrets));
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+        redact(key, secrets),
+        redactValue(item, secrets),
+      ]),
+    );
+  return value;
+}
+async function uniqueRedactedPath(
+  directory: string,
+  original: string,
+  redacted: string,
+): Promise<string> {
+  let candidate = redacted;
+  let suffix = 0;
+  while (await exists(join(directory, candidate))) {
+    suffix += 1;
+    candidate = `${redacted}-${sha256(`${original}:${suffix}`).slice(0, 12)}`;
+  }
+  return join(directory, candidate);
+}
+/** Sanitizes retained names and symlink metadata without traversing links. */
+async function redactWorkspaceMetadata(root: string, secrets: string[]): Promise<void> {
+  const walk = async (directory: string): Promise<void> => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) await walk(path);
+      else if (entry.isSymbolicLink()) {
+        const target = await readlink(path);
+        const redactedTarget = redact(target, secrets);
+        if (target !== redactedTarget) {
+          const temporary = `${path}.redacting-${sha256(path).slice(0, 12)}`;
+          await symlink(redactedTarget, temporary);
+          await unlink(path);
+          await rename(temporary, path);
+        }
+      }
+      const redactedName = redact(entry.name, secrets);
+      if (redactedName !== entry.name)
+        await rename(
+          path,
+          await uniqueRedactedPath(directory, entry.name, redactedName),
+        );
+    }
+  };
+  await walk(root);
+}
 /** Byte-level redaction deliberately never decodes workspace files as text. */
 async function redactWorkspace(root: string, secrets: string[]): Promise<void> {
   const patterns = [...new Set(secrets.filter(Boolean))]
@@ -460,11 +514,16 @@ function evaluationSummary(
       reason: "evaluator check IDs do not exactly match task checks",
       eligible_for_quality_aggregate: false,
     };
-  const entries: Array<Record<string, unknown>> = checks.map((c) => ({
-    ...got.get(c.id),
-    weight: c.weight,
-    required: c.required,
-  }));
+  const entries: Array<Record<string, unknown>> = checks.map((c) => {
+    const receivedCheck = got.get(c.id)!;
+    return {
+      id: receivedCheck.id,
+      score: receivedCheck.score,
+      passed: receivedCheck.passed,
+      weight: c.weight,
+      required: c.required,
+    };
+  });
   const quality =
     entries.reduce((n, c) => n + Number(c.score) * Number(c.weight), 0) /
     entries.reduce((n, c) => n + Number(c.weight), 0);
@@ -777,6 +836,7 @@ export class DeterministicRunner {
     if (await exists(activeWorkspace)) {
       await phase("snapshot", async () => {
         await redactWorkspace(activeWorkspace, secrets);
+        await redactWorkspaceMetadata(activeWorkspace, secrets);
         await cp(activeWorkspace, workspace, { recursive: true, errorOnExist: true, verbatimSymlinks: true });
         await rm(activeWorkspace, { recursive: true, force: true });
       });
@@ -815,12 +875,14 @@ export class DeterministicRunner {
           o.evaluator.evaluate({ workspace: protectedWorkspace, request }),
         );
         schema?.validate("evaluation", raw);
+        const persisted = redactValue(raw, secrets) as Record<string, unknown>;
+        schema?.validate("evaluation", persisted);
         evaluation = evaluationSummary(
-          raw,
+          persisted,
           o.scoringPolicy ?? { checks: o.taskChecks },
           terminal,
           request.attempt as Record<string, unknown>,
-          manifestDigest(raw),
+          manifestDigest(persisted),
         );
         if (evaluation.status === "error")
           await write(
@@ -836,7 +898,7 @@ export class DeterministicRunner {
               error_message: String(evaluation.reason),
             }),
           );
-        else await write("evaluator_result", JSON.stringify(raw));
+        else await write("evaluator_result", JSON.stringify(persisted));
         if (evaluation.status === "error")
           error(
             "evaluation",
