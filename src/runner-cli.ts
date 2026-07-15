@@ -2,7 +2,11 @@
 import { readFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
-import { DeterministicRunner, FakeHarnessAdapter } from "./runner.js";
+import {
+  deriveDiagnosticAttempt,
+  DeterministicRunner,
+  FakeHarnessAdapter,
+} from "./runner.js";
 import { sha256 } from "./digests.js";
 const [command, ...args] = process.argv.slice(2);
 const runnerGitCommit = execFileSync("git", ["rev-parse", "HEAD"], {
@@ -17,35 +21,33 @@ if (command === "inspect") {
   process.exitCode = state.finalized ? 0 : 2;
 } else if (command === "recover") {
   const [
-    requestFile,
+    parentRequestFile,
+    parentResultFile,
     stateDir,
     output,
     mode,
-    parentRunId,
+    newRunId,
     reason,
     scenario = "success",
   ] = args;
   if (
-    !requestFile ||
+    !parentRequestFile ||
+    !parentResultFile ||
     !stateDir ||
     !output ||
     !mode ||
     !["retry", "resume"].includes(mode) ||
-    !parentRunId ||
+    !newRunId ||
     !reason
   )
     throw new Error(
-      "usage: runner:fake recover <request.json> <state-dir> <output-root> <retry|resume> <parent-run-id> <reason> [scenario]",
+      "usage: runner:fake recover <parent-request.json> <parent-run.json> <state-dir> <output-root> <retry|resume> <new-run-id> <reason> [scenario]",
     );
-  const request = JSON.parse(await readFile(resolve(requestFile), "utf8"));
-  request.run_id = `${request.run_id}-${mode}-2`;
-  request.attempt = {
-    number: 2,
-    mode,
-    initiated_by: "operator",
-    parent_run_id: parentRunId,
-    reason,
-  };
+  const request = deriveDiagnosticAttempt(
+    JSON.parse(await readFile(resolve(parentRequestFile), "utf8")),
+    JSON.parse(await readFile(resolve(parentResultFile), "utf8")),
+    { mode: mode as "retry" | "resume", newRunId, reason },
+  );
   const prompt = "fake fixture";
   if (
     `sha256:${sha256(prompt)}` !== request.task.prompt_digest ||

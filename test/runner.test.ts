@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import {
   AttemptState,
   DeterministicRunner,
+  deriveDiagnosticAttempt,
   FakeHarnessAdapter,
   RunnerError,
   atomicWrite,
@@ -367,6 +368,48 @@ test("scoring policy applies threshold and optional completion requirement", asy
     });
     assert.equal(result.evaluation.criteria_passed, true);
     assert.equal(result.evaluation.end_to_end_passed, true);
+  } finally {
+    await rm(f.dir, { recursive: true, force: true });
+  }
+});
+
+test("diagnostic lineage derives from matching immutable parent evidence", async () => {
+  const f = await fixture();
+  try {
+    const parent = await new DeterministicRunner().run(f.request, {
+      root: f.dir,
+      stateSource: f.state,
+      prompt: "p",
+      adapter: f.adapter,
+      evaluator: f.evaluator,
+      taskChecks: [{ id: "core", weight: 1, required: true }],
+    });
+    const child = deriveDiagnosticAttempt(f.request, parent, {
+      mode: "retry",
+      newRunId: "retry-safe",
+      reason: "operator diagnosis",
+    });
+    assert.deepEqual(f.request.attempt, {
+      number: 1,
+      mode: "initial",
+      initiated_by: "runner",
+    });
+    assert.deepEqual(child.attempt, {
+      number: 2,
+      mode: "retry",
+      initiated_by: "operator",
+      parent_run_id: f.request.run_id,
+      reason: "operator diagnosis",
+    });
+    assert.throws(
+      () =>
+        deriveDiagnosticAttempt(
+          f.request,
+          { ...parent, run_id: "wrong" },
+          { mode: "resume", newRunId: "new", reason: "x" },
+        ),
+      RunnerError,
+    );
   } finally {
     await rm(f.dir, { recursive: true, force: true });
   }

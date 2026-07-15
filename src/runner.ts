@@ -448,6 +448,46 @@ export interface RunOptions {
   runtimeRedactions?: string[];
   runnerGitCommit?: string;
 }
+export function deriveDiagnosticAttempt(
+  parentRequest: Record<string, any>,
+  parentResult: Record<string, any>,
+  input: { mode: "retry" | "resume"; newRunId: string; reason: string },
+): Record<string, any> {
+  const safe = (id: string) => id !== "." && id !== ".." && !/[\\/\0]/.test(id);
+  if (
+    !safe(input.newRunId) ||
+    input.newRunId === parentRequest.run_id ||
+    !input.reason.trim()
+  )
+    throw new RunnerError(
+      "operator.invalid-diagnostic-attempt",
+      "new run ID and reason are required",
+      "operator",
+    );
+  if (
+    parentRequest.run_id !== parentResult.run_id ||
+    parentRequest.campaign_id !== parentResult.campaign_id ||
+    parentResult.provenance?.request_digest !== manifestDigest(parentRequest)
+  )
+    throw new RunnerError(
+      "operator.parent-mismatch",
+      "parent request/result identity or digest mismatch",
+      "operator",
+    );
+  const request = JSON.parse(JSON.stringify(parentRequest)) as Record<
+    string,
+    any
+  >;
+  request.run_id = input.newRunId;
+  request.attempt = {
+    number: Number(parentRequest.attempt?.number) + 1,
+    mode: input.mode,
+    initiated_by: "operator",
+    parent_run_id: parentRequest.run_id,
+    reason: input.reason,
+  };
+  return request;
+}
 export class DeterministicRunner {
   async run(
     inputRequest: Record<string, unknown>,
@@ -850,10 +890,35 @@ export class DeterministicRunner {
   }
   async inspect(
     root: string,
-  ): Promise<{ finalized: boolean; run?: Record<string, unknown> }> {
-    const file = join(root, "run.json");
+  ): Promise<{
+    finalized: boolean;
+    run?: Record<string, unknown>;
+    artifacts: string[];
+  }> {
+    const requestFile = join(root, "request.json");
+    const request = (await exists(requestFile))
+      ? JSON.parse(await readFile(requestFile, "utf8"))
+      : undefined;
+    const file = join(
+      root,
+      request?.artifact_targets?.run_result ?? "run.json",
+    );
+    const candidates = request?.artifact_targets
+      ? Object.values(request.artifact_targets)
+      : ["request.json", "run.json"];
+    const artifacts = (
+      await Promise.all(
+        candidates.map(async (path) =>
+          (await exists(join(root, String(path)))) ? String(path) : undefined,
+        ),
+      )
+    ).filter((path): path is string => path !== undefined);
     return (await exists(file))
-      ? { finalized: true, run: JSON.parse(await readFile(file, "utf8")) }
-      : { finalized: false };
+      ? {
+          finalized: true,
+          run: JSON.parse(await readFile(file, "utf8")),
+          artifacts,
+        }
+      : { finalized: false, artifacts };
   }
 }
