@@ -75,7 +75,7 @@ async function canonicalArtifactDirectories(tasksDirectory: string): Promise<str
   return artifacts;
 }
 
-function insideExamples(file: string): boolean { return file.includes(`${sep}spec${sep}examples${sep}`); }
+function insideExamples(root: string, file: string): boolean { return relative(root, file).split(sep).join("/").startsWith("spec/examples/"); }
 function manifestOwnedPath(file: string): boolean { const parts = file.replace(/^\.\//, "").split(/[\\/]/); return parts[0] === "tasks" || parts[0] === "suites" || parts[0] === "experiments"; }
 function identity(manifest: Manifest): string | undefined {
   if (["task", "suite", "experiment"].includes(manifest.kind)) return `${asString(manifest.value.id)}@${asString(manifest.value.version)}`;
@@ -122,7 +122,7 @@ export async function validateRepository(rootInput: string): Promise<void> {
     try { const value = asObject(await loadManifest(file)); schemas.validate(kind, value, file); manifests.push({ file, kind, value }); }
     catch (error) { diagnostics.push(...(error instanceof ValidationError ? error.diagnostics : [{ file, code: "internal", message: error instanceof Error ? error.message : String(error) }])); }
   }
-  const repositoryManifests = manifests.filter((manifest) => !insideExamples(manifest.file));
+  const repositoryManifests = manifests.filter((manifest) => !insideExamples(root, manifest.file));
   for (const manifest of repositoryManifests) {
     const declaredPaths = declaredManifestPaths(manifest);
     const manifestPath = relative(root, manifest.file).split(sep).join("/");

@@ -112,6 +112,15 @@ test("repository paths fail closed for escapes and collisions", () => {
   assert.equal(safeRelativePath("tasks/example/1.0.0/task.yaml"), true);
 });
 
+test("repository semantics remain enabled when the checkout path contains spec/examples", async () => {
+  const ancestor = await mkdtemp(join(tmpdir(), "aht-ancestor-")); const fixture = join(ancestor, "spec", "examples", "checkout");
+  try {
+    await cp(join(root, "spec/schemas"), join(fixture, "spec/schemas"), { recursive: true }); await mkdir(join(fixture, "spec/examples"), { recursive: true });
+    const { taskFile, task } = await addValidTask(fixture, "demo"); (task.prompt as Record<string, unknown>).digest = `sha256:${"0".repeat(64)}`; await writeFile(taskFile, JSON.stringify(task));
+    await assert.rejects(validateRepository(fixture), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/task-artifact" && item.message.includes("prompt digest mismatch")));
+  } finally { await rm(ancestor, { recursive: true, force: true }); }
+});
+
 async function addValidTask(fixture: string, taskId: string): Promise<{ taskFile: string; task: Record<string, unknown> }> {
   const taskRoot = `tasks/${taskId}/1.0.0`; const taskFile = join(fixture, taskRoot, "task.json"); await mkdir(join(fixture, taskRoot, "state"), { recursive: true }); await mkdir(join(fixture, taskRoot, "evaluator"), { recursive: true });
   await writeFile(join(fixture, taskRoot, "prompt.md"), "prompt bytes\n"); await writeFile(join(fixture, taskRoot, "state/file.txt"), "state"); await mkdir(join(fixture, taskRoot, "state/suites")); await writeFile(join(fixture, taskRoot, "state/task.json"), "not a manifest"); await writeFile(join(fixture, taskRoot, "state/suites/my-suite.yaml"), "not: a framework suite"); await writeFile(join(fixture, taskRoot, "evaluator/evaluate.py"), "evaluator"); await writeFile(join(fixture, taskRoot, "evaluator/evaluator.json"), "not an evaluation artifact");
