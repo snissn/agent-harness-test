@@ -16,6 +16,7 @@ const terminalAttributionByReason: Record<string, string> = {
   cancelled: "operator"
 };
 const artifactTargetKeys: Record<string, string> = { request: "request", "run-result": "run_result", "native-events": "native_events", "normalized-events": "normalized_events", stdout: "stdout", stderr: "stderr", "final-message": "final_message", "workspace-patch": "workspace_patch", "workspace-tree": "workspace_tree", "evaluator-result": "evaluator_result" };
+const reservedRunJsonArtifacts = new Set(["workspace-tree.json"]);
 
 export function safeRelativePath(value: string): boolean {
   return value.length > 0 && !value.includes("\\") && !value.includes("\0") && !/^[A-Za-z]:/.test(value) && !posix.isAbsolute(value) && value === posix.normalize(value) && !value.split("/").some((part) => !part || part === "." || part === "..");
@@ -102,10 +103,13 @@ async function canonicalArtifactDirectories(tasksDirectory: string): Promise<str
 }
 
 function insideExamples(root: string, file: string): boolean { return relative(root, file).split(sep).join("/").startsWith("spec/examples/"); }
+function reservedRunJsonArtifactPath(parts: string[]): boolean {
+  return parts.length === 6 && parts[0] === "results" && Boolean(parts[1] && parts[2] && parts[4]) && parts[3] === "runs" && reservedRunJsonArtifacts.has(parts[5]!);
+}
 function manifestOwnedPath(file: string): boolean {
   const parts = file.replace(/^\.\//, "").split(/[\\/]/);
   const reportProjection = parts[0] === "results" && parts[3] === "reports";
-  return parts[0] === "tasks" || parts[0] === "suites" || parts[0] === "experiments" || (parts[0] === "results" && !reportProjection);
+  return parts[0] === "tasks" || parts[0] === "suites" || parts[0] === "experiments" || (parts[0] === "results" && !reportProjection && !reservedRunJsonArtifactPath(parts));
 }
 function campaignIdentity(value: ObjectValue): string { return `${asString(asObject(value.experiment).id)}/${asString(value.campaign_id)}`; }
 function identity(manifest: Manifest): string | undefined {

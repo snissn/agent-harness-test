@@ -477,8 +477,8 @@ test("canonical campaign and run result artifacts are discovered and schema-vali
 
 test("non-report result manifest paths are rejected while reports remain exempt", async () => {
   const fixture = await mkdtemp(join(tmpdir(), "aht-repo-")); await cp(join(root, "spec/schemas"), join(fixture, "spec/schemas"), { recursive: true }); await mkdir(join(fixture, "spec/examples"), { recursive: true });
-  const campaignDirectory = join(fixture, "results/demo/campaign"); await mkdir(join(campaignDirectory, "reports"), { recursive: true }); await mkdir(join(fixture, "results/demo/reports"), { recursive: true });
-  const unknownPaths = ["results/demo/campaign/campaign.yaml", "results/demo/campaign/request.json", "results/demo/reports/campaign.yaml"];
+  const campaignDirectory = join(fixture, "results/demo/campaign"); await mkdir(join(campaignDirectory, "reports"), { recursive: true }); await mkdir(join(campaignDirectory, "runs/run"), { recursive: true }); await mkdir(join(fixture, "results/demo/reports"), { recursive: true });
+  const unknownPaths = ["results/demo/campaign/campaign.yaml", "results/demo/campaign/request.json", "results/demo/campaign/workspace-tree.json", "results/demo/campaign/runs/run/arbitrary.json", "results/demo/reports/campaign.yaml"];
   for (const path of unknownPaths) await writeFile(join(fixture, path), "{ not a manifest }");
   await writeFile(join(campaignDirectory, "reports/request.json"), "{ not a manifest }");
   await assert.rejects(validateRepository(fixture), (error: unknown) => error instanceof ValidationError
@@ -756,6 +756,12 @@ test("unpinned model requests accept result-only snapshot resolution", async () 
 test("run artifacts verify valid referenced bytes", async () => {
   const fixture = await campaignRunFixture(); const bytes = "captured output\n"; const path = `runs/${fixture.result.run_id}/stdout.log`; await writeFile(join(fixture.root, "results", fixture.result.experiment.id, fixture.result.campaign_id, path), bytes);
   fixture.result.artifacts = [{ kind: "stdout", path, digest: `sha256:${sha256(bytes)}`, bytes: Buffer.byteLength(bytes) }]; fixture.campaign.runs[0].digest = manifestDigest(fixture.result);
+  await writeFile(fixture.resultFile, JSON.stringify(fixture.result)); await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign)); await validateRepository(fixture.root);
+});
+
+test("canonical workspace-tree JSON artifacts are verified without manifest inference", async () => {
+  const fixture = await campaignRunFixture(); const bytes = '{"entries":[]}\n'; const path = `runs/${fixture.result.run_id}/workspace-tree.json`; await writeFile(join(fixture.root, "results", fixture.result.experiment.id, fixture.result.campaign_id, path), bytes);
+  fixture.result.artifacts = [{ kind: "workspace-tree", path, digest: `sha256:${sha256(bytes)}`, bytes: Buffer.byteLength(bytes) }]; fixture.campaign.runs[0].digest = manifestDigest(fixture.result);
   await writeFile(fixture.resultFile, JSON.stringify(fixture.result)); await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign)); await validateRepository(fixture.root);
 });
 

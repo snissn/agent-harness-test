@@ -16,9 +16,13 @@ repository layout plus all structural examples. Suite and experiment manifests
 must use their versioned canonical paths; task and result source manifests must
 use the complete canonical layouts defined in `SPEC.md`. Noncanonical JSON/YAML
 manifest paths beneath `results/` are rejected unless they are under the canonical
-`results/<experiment-id>/<campaign-id>/reports/` projection directory; report
-projections are never inferred as source manifests, even when their name or nested
-directories resemble one. Validation rejects duplicate keys, YAML tags,
+`results/<experiment-id>/<campaign-id>/reports/` projection directory or are a
+reserved JSON artifact at its canonical run path, currently
+`results/<experiment-id>/<campaign-id>/runs/<run-id>/workspace-tree.json`. Report
+projections and reserved run artifacts are never inferred as source manifests;
+listed run artifacts are instead verified from `run.json` by path, raw-byte digest,
+and optional byte count. Misplaced reserved names and arbitrary JSON/YAML files in
+run directories remain rejected. Validation rejects duplicate keys, YAML tags,
 anchors, aliases, merge keys, non-string mapping keys, non-JSON YAML values,
 unsafe/escaping paths, schema errors, and the implemented
 cross-file invariants. Diagnostics use `file [rule] path: message` and exit
