@@ -75,14 +75,18 @@ require provider credentials.
 
 For a Git-connected Workers deployment, use these settings:
 
+- **Worker name:** `agent-harness-test`
+- **Root directory:** `/` (the repository root containing `wrangler.jsonc`)
 - **Build command:** `npm run build`
 - **Deploy command:** `npm run deploy`
 - **Production branch:** `main`
 
 The checked-in `.node-version` selects Node.js 24 in Cloudflare Builds, and
 `wrangler.jsonc` publishes `dist/` as static assets. Preview builds for
-non-production branches are optional. To verify the complete build and deploy
-configuration without publishing anything, run:
+non-production branches are optional. Leave automatic dependency installation
+enabled so the build-only `tsx` and `wrangler` development dependencies are
+available. To verify the complete build and deploy configuration without
+publishing anything, run:
 
 ```sh
 npm ci
