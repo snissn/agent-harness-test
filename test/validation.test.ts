@@ -936,3 +936,25 @@ test("canonical suite, experiment, and result manifests reject symlinks without 
     }
   } finally { await rm(outside, { recursive: true, force: true }); }
 });
+
+test("canonical suite, experiment, and result manifest paths reject directories without traversing them", async () => {
+  for (const { path, kind } of [
+    { path: "suites/demo/1.0.0.json", kind: "suite" },
+    { path: "experiments/demo/1.0.0.json", kind: "experiment" },
+    { path: "results/demo/campaign/campaign.json", kind: "campaign" },
+    { path: "results/demo/campaign/runs/run/run.json", kind: "run-result" }
+  ]) {
+    const fixture = await mkdtemp(join(tmpdir(), "aht-repo-"));
+    try {
+      await cp(join(root, "spec/schemas"), join(fixture, "spec/schemas"), { recursive: true });
+      await mkdir(join(fixture, "spec/examples"), { recursive: true });
+      await mkdir(join(fixture, path), { recursive: true });
+      await writeFile(join(fixture, path, "README.md"), "not a manifest\n");
+      await assert.rejects(validateRepository(fixture), (error: unknown) => error instanceof ValidationError
+        && error.diagnostics.length === 1
+        && error.diagnostics[0]?.code === `semantic/${kind}-manifest-type`
+        && error.diagnostics[0]?.file.endsWith(`/${path}`)
+        && error.diagnostics[0]?.message.includes("regular non-symlink file"));
+    } finally { await rm(fixture, { recursive: true, force: true }); }
+  }
+});

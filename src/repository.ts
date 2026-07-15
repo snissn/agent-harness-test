@@ -62,11 +62,9 @@ async function resolveSafe(root: string, value: string): Promise<string> {
 async function walk(root: string, directory: string, out: string[]): Promise<void> {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const file = join(directory, entry.name);
-    if (entry.isSymbolicLink()) {
-      const repositoryPath = relative(root, file).split(sep).join("/");
-      if (kindFromRepositoryPath(repositoryPath)) out.push(file);
-      continue;
-    }
+    const repositoryPath = relative(root, file).split(sep).join("/");
+    if (kindFromRepositoryPath(repositoryPath)) { out.push(file); continue; }
+    if (entry.isSymbolicLink()) continue;
     if (entry.isDirectory()) await walk(root, file, out);
     else if (entry.isFile() && isManifestPath(file)) out.push(file);
   }
