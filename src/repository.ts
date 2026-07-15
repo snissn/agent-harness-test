@@ -59,11 +59,15 @@ async function resolveSafe(root: string, value: string): Promise<string> {
   return absolute;
 }
 
-async function walk(directory: string, out: string[]): Promise<void> {
+async function walk(root: string, directory: string, out: string[]): Promise<void> {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const file = join(directory, entry.name);
-    if (entry.isSymbolicLink()) continue;
-    if (entry.isDirectory()) await walk(file, out);
+    if (entry.isSymbolicLink()) {
+      const repositoryPath = relative(root, file).split(sep).join("/");
+      if (kindFromRepositoryPath(repositoryPath)) out.push(file);
+      continue;
+    }
+    if (entry.isDirectory()) await walk(root, file, out);
     else if (entry.isFile() && isManifestPath(file)) out.push(file);
   }
 }
@@ -129,16 +133,16 @@ export async function validateRepository(rootInput: string): Promise<void> {
   const repoFiles = tasksDirectoryAvailable ? await taskManifests(tasksDirectory) : [];
   for (const directory of ["suites", "experiments", "results"]) {
     const discoveryRoot = join(root, directory);
-    if (await discoveryDirectory(discoveryRoot, diagnostics)) await walk(discoveryRoot, repoFiles);
+    if (await discoveryDirectory(discoveryRoot, diagnostics)) await walk(root, discoveryRoot, repoFiles);
   }
   for (const file of [...exampleFiles, ...repoFiles].sort()) {
     const repositoryPath = relative(root, file).split(sep).join("/");
     const kind = kindFromRepositoryPath(repositoryPath);
     if (!kind) { if (manifestOwnedPath(repositoryPath)) diagnostics.push({ file, code: "semantic/unknown-manifest", message: "cannot infer manifest schema kind from a manifest-owned path" }); continue; }
-    if (repositoryPath.startsWith("tasks/")) {
+    if (!insideExamples(root, file)) {
       const fileType = await lstat(file);
       if (fileType.isSymbolicLink() || !fileType.isFile()) {
-        diagnostics.push({ file, code: "semantic/task-manifest-type", message: "canonical task manifest must be a regular non-symlink file" });
+        diagnostics.push({ file, code: `semantic/${kind}-manifest-type`, message: `canonical ${kind} manifest must be a regular non-symlink file` });
         continue;
       }
     }

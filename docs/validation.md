@@ -27,6 +27,11 @@ filename aliases; repository discovery does not recognize those aliases.
 Before enumeration, each canonical discovery root (`spec/examples`, `tasks`,
 `suites`, `experiments`, and `results`) must be an actual non-symlink directory;
 missing roots are ignored, while symlink and non-directory roots fail validation.
+Within repository roots, every path that infers a canonical task, suite,
+experiment, campaign, request, result, or evaluation source manifest must be a
+regular non-symlink file. Discovery reports canonical manifest symlinks without
+following their targets; irrelevant symlinks at noncanonical report paths remain
+ignored.
 
 Task authors should add a failing fixture/test first, update `SPEC.md` and its
 schema before using a new concept, then add the valid manifest/artifacts and

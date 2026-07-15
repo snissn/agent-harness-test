@@ -897,6 +897,7 @@ test("noncanonical result reports are ignored even with exact names or canonical
   const fixture = await mkdtemp(join(tmpdir(), "aht-repo-")); await cp(join(root, "spec/schemas"), join(fixture, "spec/schemas"), { recursive: true }); await mkdir(join(fixture, "spec/examples"), { recursive: true });
   const reports = join(fixture, "results/demo/campaign/reports"); await mkdir(reports, { recursive: true });
   for (const name of ["suite-summary.json", "experiment-notes.json", "campaign.json", "task.json", "request.json", "run.json", "evaluator.json", "run-request.json", "run-result.json"]) await writeFile(join(reports, name), "{ not a manifest }");
+  await symlink("campaign.json", join(reports, "ignored-report-link.json"));
   await mkdir(join(reports, "suites/foo"), { recursive: true }); await writeFile(join(reports, "suites/foo/1.0.0.json"), "{ not a manifest }");
   await mkdir(join(reports, "experiments/foo"), { recursive: true }); await writeFile(join(reports, "experiments/foo/1.0.0.json"), "{ not a manifest }");
   await validateRepository(fixture);
@@ -908,4 +909,30 @@ test("canonical task manifests reject symlinks without following external target
   const task = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/task.example.json"), "utf8")); task.status = "draft"; await writeFile(externalTask, JSON.stringify(task));
   const taskDirectory = join(fixture, "tasks/demo/1.0.0"); await mkdir(taskDirectory, { recursive: true }); await symlink(externalTask, join(taskDirectory, "task.json"));
   await assert.rejects(validateRepository(fixture), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/task-manifest-type" && item.message.includes("regular non-symlink file")));
+});
+
+test("canonical suite, experiment, and result manifests reject symlinks without following external targets", async () => {
+  const outside = await mkdtemp(join(tmpdir(), "aht-external-")); const externalManifest = join(outside, "invalid.json");
+  await writeFile(externalManifest, "{ invalid external manifest");
+  try {
+    for (const { path, parent, kind } of [
+      { path: "suites/demo/1.0.0.json", parent: "suites/demo", kind: "suite" },
+      { path: "experiments/demo/1.0.0.json", parent: "experiments/demo", kind: "experiment" },
+      { path: "results/demo/campaign/campaign.json", parent: "results/demo/campaign", kind: "campaign" },
+      { path: "results/demo/campaign/runs/run/run.json", parent: "results/demo/campaign/runs/run", kind: "run-result" }
+    ]) {
+      const fixture = await mkdtemp(join(tmpdir(), "aht-repo-"));
+      try {
+        await cp(join(root, "spec/schemas"), join(fixture, "spec/schemas"), { recursive: true });
+        await mkdir(join(fixture, "spec/examples"), { recursive: true });
+        await mkdir(join(fixture, parent), { recursive: true });
+        await symlink(externalManifest, join(fixture, path));
+        await assert.rejects(validateRepository(fixture), (error: unknown) => error instanceof ValidationError
+          && error.diagnostics.length === 1
+          && error.diagnostics[0]?.code === `semantic/${kind}-manifest-type`
+          && error.diagnostics[0]?.file.endsWith(`/${path}`)
+          && error.diagnostics[0]?.message.includes("regular non-symlink file"));
+      } finally { await rm(fixture, { recursive: true, force: true }); }
+    }
+  } finally { await rm(outside, { recursive: true, force: true }); }
 });
