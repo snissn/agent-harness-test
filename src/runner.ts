@@ -605,6 +605,7 @@ export class DeterministicRunner {
     let post = `tree-sha256-v1:${"0".repeat(64)}`;
     let final = post;
     let initialBytes = 0;
+    let materializationVerified = false;
     let evaluation: Record<string, unknown> = {
       status: "not-run",
       reason: "no salvageable workspace",
@@ -660,6 +661,7 @@ export class DeterministicRunner {
             "initial state digest mismatch",
             "environment",
           );
+        materializationVerified = true;
         initialBytes = await workspaceBytes(activeWorkspace);
       });
       state.transition("materialized");
@@ -754,8 +756,9 @@ export class DeterministicRunner {
         "workspace_patch",
         diffManifest(initialManifest, finalManifest),
       );
-      const protectedWorkspace = join(root, ".evaluator-workspace");
-      try {
+      if (materializationVerified) {
+        const protectedWorkspace = join(root, ".evaluator-workspace");
+        try {
         await cp(workspace, protectedWorkspace, { recursive: true, verbatimSymlinks: true });
         const raw = await phase("evaluation", () =>
           o.evaluator.evaluate({ workspace: protectedWorkspace, request }),
@@ -790,7 +793,7 @@ export class DeterministicRunner {
             "evaluator",
             "evaluator.invalid-output",
           );
-      } catch (e) {
+        } catch (e) {
         const message = redact(
           e instanceof Error ? e.message : String(e),
           secrets,
@@ -813,8 +816,9 @@ export class DeterministicRunner {
           eligible_for_quality_aggregate: false,
         };
         error("evaluation", e, "evaluator", "evaluator.error");
-      } finally {
-        await rm(protectedWorkspace, { recursive: true, force: true });
+        } finally {
+          await rm(protectedWorkspace, { recursive: true, force: true });
+        }
       }
     }
     const base = join(

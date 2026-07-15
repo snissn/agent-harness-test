@@ -32,8 +32,8 @@ deterministic validation/CI gate, and a provider-free deterministic runner.
 - `npm run runner:fake -- inspect <run-directory>` safely reports whether an
   interrupted attempt has a finalized result (exit `0`) or remains incomplete
   (exit `2`); it never repairs or overwrites evidence.
-- `npm run runner:fake -- recover <request.json> <state-dir> <output-root>
-<retry|resume> <parent-run-id> <reason> [scenario]` is an explicit,
+- `npm run runner:fake -- recover <parent-request.json> <parent-run.json>
+<state-dir> <output-root> <retry|resume> <new-run-id> <reason> [scenario]` is an explicit,
   operator-initiated diagnostic attempt. It creates a distinct run ID with
   parent lineage and attempt number two; the runner never retries or resumes
   automatically. The request must already contain the correct state, prompt,

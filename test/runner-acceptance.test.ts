@@ -94,6 +94,27 @@ test("schema-enabled evaluator and adapter failures remain structured and never 
   } finally { await rm(unsafeExperiment.dir, { recursive: true, force: true }); }
 });
 
+test("schema-enabled materialization digest mismatch retains evidence without evaluator success", async () => {
+  const f = await fixture("run-unverified-materialization");
+  try {
+    f.request.workspace.initial_tree_digest = `tree-sha256-v1:${"f".repeat(64)}`;
+    let evaluated = false;
+    const result = await new DeterministicRunner().run(f.request, {
+      root: f.dir, stateSource: f.state, prompt: "p", schemaDirectory: schemas,
+      runnerGitCommit: "3bea225008b4972d547dc58f71273966b278f885",
+      adapter: { run: async () => ({ terminal: "agent_completed" }) },
+      evaluator: { evaluate: async () => { evaluated = true; return {}; } },
+      taskChecks: [{ id: "core", weight: 1, required: true }],
+    });
+    assert.equal(result.terminal.reason, "environment_error");
+    assert.equal(result.evaluation.status, "not-run");
+    assert.equal(result.evaluation.eligible_for_quality_aggregate, false);
+    assert.equal(evaluated, false);
+    assert.equal(await lstat(join(resultRoot(f), "evaluator.json")).then(() => true).catch(() => false), false);
+    assert.ok(result.artifacts.some((artifact: any) => artifact.kind === "workspace-tree"));
+  } finally { await rm(f.dir, { recursive: true, force: true }); }
+});
+
 test("hard timeout snapshots partial capture and clears timers without late mutation", async () => {
   const f = await fixture("run-late-timeout");
   let lateDone!: () => void;
