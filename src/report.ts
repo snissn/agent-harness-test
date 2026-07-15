@@ -40,11 +40,13 @@ CREATE TABLE lineage (run_id TEXT, parent_run_id TEXT, attempt_mode TEXT);`);
   const errors: Json[] = [], rows: Json[] = [];
   const taskMetadata = new Map<string, Json>();
   const experimentMetadata = new Map<string, Json>();
+  const suiteMetadata = new Map<string, Json>();
+  for (const path of (await files(join(root, "suites"))).filter(path => path.endsWith(".json"))) { const suite = await json(path); validator.validate("suite", suite, path); suiteMetadata.set(`${suite.id}@${suite.version}`, suite); }
   for (const path of (await files(join(root, "experiments"))).filter(path => path.endsWith(".json"))) { const experiment = await json(path); validator.validate("experiment", experiment, path); experimentMetadata.set(`${experiment.id}@${experiment.version}`, experiment); }
   for (const path of (await files(join(root, "tasks"))).filter(path => /\/task\.json$/.test(path))) { const task = await json(path); taskMetadata.set(`${task.id}@${task.version}`, task); }
   for (const campaignPath of campaignFiles) {
     let campaign: Json;
-    try { campaign = await json(campaignPath); validator.validate("campaign", campaign, campaignPath); const experiment = experimentMetadata.get(`${campaign.experiment.id}@${campaign.experiment.version}`); if (!experiment || manifestDigest(experiment) !== campaign.experiment.spec_digest) throw new Error("campaign experiment reference/digest is invalid"); }
+    try { campaign = await json(campaignPath); validator.validate("campaign", campaign, campaignPath); const experiment = experimentMetadata.get(`${campaign.experiment.id}@${campaign.experiment.version}`); if (!experiment || manifestDigest(experiment) !== campaign.experiment.spec_digest) throw new Error("campaign experiment reference/digest is invalid"); const suite = suiteMetadata.get(`${campaign.suite.id}@${campaign.suite.version}`); if (!suite || manifestDigest(suite) !== campaign.suite.spec_digest) throw new Error("campaign suite reference/digest is invalid"); }
     catch (error) { errors.push({ source: relative(root, campaignPath), code: "invalid-campaign", message: String(error).replaceAll(root, "[REPOSITORY]") }); continue; }
     const campaignDir = resolve(campaignPath, "..");
     db.prepare("INSERT INTO campaigns VALUES (?, ?, ?, ?, ?)").run(`${campaign.experiment.id}@${campaign.experiment.version}:${campaign.campaign_id}`, campaign.observed_at, campaign.mode, `${campaign.suite.id}@${campaign.suite.version}`, campaign.status);
@@ -60,7 +62,7 @@ CREATE TABLE lineage (run_id TEXT, parent_run_id TEXT, attempt_mode TEXT);`);
           if (!artifactPath.startsWith(`${campaignDir}/`)) throw new Error(`artifact path escapes campaign: ${artifact.path}`);
           if (`sha256:${sha256(await readFile(artifactPath))}` !== artifact.digest) throw new Error(`artifact digest mismatch: ${artifact.path}`);
         }
-        const task = taskMetadata.get(`${run.task.id}@${run.task.version}`) ?? {};
+        const task = taskMetadata.get(`${run.task.id}@${run.task.version}`); if (!task || manifestDigest(task) !== run.task.spec_digest) throw new Error("run task reference/digest is invalid");
         const evaluation = run.evaluation ?? {}, metrics = run.metrics ?? {}, timing = metrics.timing ?? {}, tokens = metrics.tokens ?? {}, cost = metrics.cost ?? {}, resources = metrics.resources ?? {};
         const row = { campaign_id: campaign.campaign_id, observed_at: campaign.observed_at, mode: campaign.mode, experiment: `${campaign.experiment.id}@${campaign.experiment.version}`, configuration_id: run.configuration_id, task: `${run.task.id}@${run.task.version}`, category: task.category ?? "unknown", languages: task.languages ?? [], effort: run.resolved_configuration.effort.native_value ?? "unknown", errors: run.errors ?? [], attempt: run.attempt, terminal: run.terminal, evaluation, metrics, compatible_key: JSON.stringify({ suite: campaign.suite, task: run.task, harness: run.resolved_configuration.harness, model: run.resolved_configuration.model, effort: run.resolved_configuration.effort, topology: run.provenance.execution }) };
         rows.push(row);
