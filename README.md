@@ -39,6 +39,34 @@ deterministic validation/CI gate, and a provider-free deterministic runner.
   automatically. The request must already contain the correct state, prompt,
   and stdin digests—the CLI does not rewrite finalized request facts.
 
+## Rebuild the local report
+
+The SQLite index and static report are disposable derived projections. From a
+checkout containing `results/`, run:
+
+```sh
+npm run report:rebuild
+open reports/index.html
+```
+
+This revalidates each campaign/run/request/evaluator schema, cross-file identity,
+campaign run digest, cached campaign summary, and retained artifact digest and
+byte count while walking source artifacts in stable order. It writes
+`reports/index.sqlite`, `reports/report-data.json`, and a self-contained
+`reports/index.html`; deleting `reports/` and rerunning is safe. Invalid source
+records are quarantined in `report-data.json` and `ingestion_errors` rather
+than contributing valid aggregate rows. Quality/headline and end-to-end-pass
+denominators include only initial attempts eligible for quality aggregation;
+operational completion includes all initial attempts. Retry/resume attempts,
+unavailable telemetry, local/non-canonical topology, unsnapshotted model IDs,
+and one-repetition smoke data are visibly qualified rather than normalized.
+Historical points connect only within an exact suite/task/harness/model/effort/
+topology identity; incompatible identities remain separate series. Campaign
+identity is scoped by experiment, so distinct experiments may reuse a local
+campaign ID without colliding in the projection.
+
+No provider credentials are needed to rebuild or open the report.
+
 ## Runner contracts
 
 Adapters receive an immutable resolved request, workspace, exact prompt bytes,

@@ -11,6 +11,7 @@
     "test": "tsx --test test/**/*.test.ts",
     "validate": "tsx src/cli.ts validate",
     "validate:file": "tsx src/cli.ts file",
+    "report:rebuild": "tsx src/cli.ts report rebuild",
     "runner:fake": "tsx src/runner-cli.ts"
   },
   "dependencies": {
