@@ -1,0 +1,11 @@
+Implemented [text_report.py]([REDACTED]).
+
+It now supports:
+
+- Ignoring blank lines
+- ASCII-letter word extraction and lowercase counting
+- Deterministic count/word sorting
+- `--limit` and case-insensitive `--prefix`
+- Concise errors for invalid arguments, missing files, and invalid UTF-8
+
+Validation passed with compilation, assertion-based coverage, and CLI error checks. No bundled unit tests were present.
