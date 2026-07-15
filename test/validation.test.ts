@@ -431,6 +431,22 @@ test("run request configurations exactly match an experiment declaration", async
   await assert.rejects(validateRepository(drifted.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-configuration-reference"));
 });
 
+test("Codex invocation full_access matches its sandbox-bypass argv", async () => {
+  const bypassed = await campaignRunFixture(); bypassed.request.invocation.argv.push("--dangerously-bypass-approvals-and-sandbox"); bypassed.result.provenance.request_digest = manifestDigest(bypassed.request); bypassed.campaign.runs[0].digest = manifestDigest(bypassed.result); await writeFile(bypassed.requestFile, JSON.stringify(bypassed.request)); await writeFile(bypassed.resultFile, JSON.stringify(bypassed.result)); await writeFile(bypassed.campaignFile, JSON.stringify(bypassed.campaign));
+  await assert.rejects(validateRepository(bypassed.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/invocation-full-access"));
+  const normalized = await campaignRunFixture(); normalized.request.invocation.full_access = true; normalized.request.execution.isolation = "outer-sandbox"; normalized.result.provenance.execution.isolation = "outer-sandbox"; normalized.result.provenance.request_digest = manifestDigest(normalized.request); normalized.campaign.runs[0].digest = manifestDigest(normalized.result); await writeFile(normalized.requestFile, JSON.stringify(normalized.request)); await writeFile(normalized.resultFile, JSON.stringify(normalized.result)); await writeFile(normalized.campaignFile, JSON.stringify(normalized.campaign));
+  await assert.rejects(validateRepository(normalized.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/invocation-full-access"));
+});
+
+test("run invocation runtime fingerprints match campaign preflight", async () => {
+  const fixture = await campaignRunFixture();
+  for (const field of ["resolved_runtime_version", "runtime_digest", "executable_digest"]) {
+    const original = fixture.request.invocation[field]; fixture.request.invocation[field] = field === "resolved_runtime_version" ? "9.9.9" : "sha256:0000000000000000000000000000000000000000000000000000000000000000"; fixture.result.provenance.request_digest = manifestDigest(fixture.request); fixture.campaign.runs[0].digest = manifestDigest(fixture.result); await writeFile(fixture.requestFile, JSON.stringify(fixture.request)); await writeFile(fixture.resultFile, JSON.stringify(fixture.result)); await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign));
+    await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/campaign-preflight"));
+    fixture.request.invocation[field] = original;
+  }
+});
+
 test("run request workspace fingerprints resolve against its task spec", async () => {
   const fixture = await campaignRunFixture(); fixture.request.workspace.prompt_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"; fixture.result.provenance.request_digest = manifestDigest(fixture.request); await writeFile(fixture.requestFile, JSON.stringify(fixture.request)); await writeFile(fixture.resultFile, JSON.stringify(fixture.result));
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/workspace-fingerprint"));

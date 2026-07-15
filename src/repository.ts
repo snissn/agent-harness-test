@@ -324,9 +324,27 @@ export async function validateRepository(rootInput: string): Promise<void> {
         } catch (error) { diagnostics.push({ file: manifest.file, code: "semantic/workspace-fingerprint", message: error instanceof Error ? error.message : String(error) }); }
       }
     }
-    if (manifest.kind === "run-request" && experiment) {
-      const configuration = asObject(manifest.value.configuration), declared = (experiment.value.configurations as unknown[]).find((item) => asObject(item).id === configuration.id);
-      if (!declared || manifestDigest(declared) !== manifestDigest(configuration)) diagnostics.push({ file: manifest.file, code: "semantic/run-configuration-reference", message: `run configuration ${asString(configuration.id)} does not exactly match its experiment declaration` });
+    if (manifest.kind === "run-request") {
+      const configuration = asObject(manifest.value.configuration), harness = asObject(configuration.harness), invocation = asObject(manifest.value.invocation);
+      if (experiment) {
+        const declared = (experiment.value.configurations as unknown[]).find((item) => asObject(item).id === configuration.id);
+        if (!declared || manifestDigest(declared) !== manifestDigest(configuration)) diagnostics.push({ file: manifest.file, code: "semantic/run-configuration-reference", message: `run configuration ${asString(configuration.id)} does not exactly match its experiment declaration` });
+      }
+      if (asString(harness.family) === "codex") {
+        const bypassesSandbox = (invocation.argv as unknown[]).some((argument) => argument === "--dangerously-bypass-approvals-and-sandbox");
+        if (invocation.full_access !== bypassesSandbox) diagnostics.push({ file: manifest.file, code: "semantic/invocation-full-access", message: "Codex full_access must match the sandbox-bypass argv flag" });
+      }
+      const campaign = byKindIdentity.get(`campaign:${asString(manifest.value.campaign_id)}`);
+      if (campaign) {
+        const preflight = asObject(campaign.value.preflight), resolutions = preflight.harness_runtimes as unknown[];
+        const matchesPreflight = resolutions.some((item) => { const resolution = asObject(item); return resolution.harness_family === harness.family
+          && resolution.runtime_source === invocation.runtime_source
+          && resolution.requested_runtime === invocation.requested_runtime
+          && resolution.resolved_runtime_version === invocation.resolved_runtime_version
+          && resolution.runtime_digest === invocation.runtime_digest
+          && resolution.executable_digest === invocation.executable_digest; });
+        if (!matchesPreflight) diagnostics.push({ file: manifest.file, code: "semantic/campaign-preflight", message: `run invocation does not match campaign preflight for ${asString(harness.family)}` });
+      }
     }
   }
   const runRequestsByFile = new Map(repositoryManifests.filter((manifest) => manifest.kind === "run-request").map((manifest) => [resolve(manifest.file), manifest]));
