@@ -45,7 +45,8 @@ mirrored check results, scoring derivations, and end-to-end pass state. Finalize
 campaign summaries are recomputed only after every unique run reference verifies.
 `recorded_runs` counts referenced results, `operational_successes` counts true
 `terminal.operational_success` values, and the quality-eligible and end-to-end
-counters use their corresponding run evaluation booleans. Per SPEC section
+counters use their corresponding run evaluation booleans. Quality eligibility is
+verified from evaluation status and the terminal failure taxonomy. Per SPEC section
 11.2, `invalid_runs` narrowly counts results excluded from the quality denominator
 (`eligible_for_quality_aggregate = false`); it is not inferred from planned run
 counts or campaign status. This command deliberately does not run agents or

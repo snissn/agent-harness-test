@@ -8,6 +8,7 @@ import { Diagnostic, ValidationError } from "./types.js";
 type ObjectValue = Record<string, unknown>;
 type Manifest = { file: string; kind: string; value: ObjectValue };
 const nonDraft = new Set(["candidate", "released", "retired"]);
+const scorableFailureReasons = new Set(["wall_time_exhausted", "token_limit_exhausted", "tool_limit_exhausted", "agent_failed"]);
 
 export function safeRelativePath(value: string): boolean {
   return value.length > 0 && !value.includes("\\") && !value.includes("\0") && !/^[A-Za-z]:/.test(value) && !posix.isAbsolute(value) && value === posix.normalize(value) && !value.split("/").some((part) => !part || part === "." || part === "..");
@@ -308,6 +309,10 @@ export async function validateRepository(rootInput: string): Promise<void> {
     const experimentReference = asObject(manifest.value.experiment), suiteReference = asObject(manifest.value.suite);
     const experiment = validateSpecReference(manifest, experimentReference, "experiment", experimentByIdentity);
     const suite = validateSpecReference(manifest, suiteReference, "suite", suiteByIdentity);
+    if (experiment) {
+      const repetition = manifest.value.repetition as number, repetitions = experiment.value.repetitions as number;
+      if (repetition < 1 || repetition > repetitions) diagnostics.push({ file: manifest.file, code: "semantic/run-repetition", message: `run repetition ${repetition} must be between 1 and experiment repetitions ${repetitions}` });
+    }
     if (experiment && suite && manifestDigest(suiteReference) !== manifestDigest(experiment.value.suite)) diagnostics.push({ file: manifest.file, code: "semantic/experiment-suite", message: "run suite does not match the experiment's pinned suite" });
     const taskReference = asObject(manifest.value.task), task = validateSpecReference(manifest, taskReference, "task", taskByIdentity);
     if (task) {
@@ -390,6 +395,9 @@ export async function validateRepository(rootInput: string): Promise<void> {
   const evaluationsByFile = new Map(repositoryManifests.filter((manifest) => manifest.kind === "evaluation").map((manifest) => [resolve(manifest.file), manifest]));
   for (const run of repositoryManifests.filter((manifest) => manifest.kind === "run-result")) {
     const summary = asObject(run.value.evaluation), summaryStatus = asString(summary.status);
+    const terminal = asObject(run.value.terminal), terminalReason = asString(terminal.reason);
+    const qualityEligible = summaryStatus === "ok" && (scorableFailureReasons.has(terminalReason) || (terminalReason === "agent_completed" && terminal.attribution === "agent"));
+    if (summary.eligible_for_quality_aggregate !== qualityEligible) diagnostics.push({ file: run.file, code: "semantic/run-quality-eligibility", message: `eligible_for_quality_aggregate must be ${qualityEligible} for evaluation status ${summaryStatus} and terminal reason ${terminalReason}` });
     const evaluation = evaluationsByFile.get(resolve(dirname(run.file), "evaluator.json"));
     if (!evaluation) {
       if (summaryStatus === "ok") diagnostics.push({ file: run.file, code: "semantic/run-evaluation-reference", message: "successful run evaluation requires a co-located evaluator.json" });
@@ -435,7 +443,6 @@ export async function validateRepository(rootInput: string): Promise<void> {
     const criteriaPassed = artifactQualityScore >= (scoring.pass_threshold as number)
       && [...declaredChecks.entries()].every(([id, check]) => check.required !== true || evaluatorChecks.get(id)?.passed === true);
     const agentCompletionRequired = scoring.require_agent_completion === true;
-    const terminal = asObject(run.value.terminal);
     const agentCompleted = terminal.reason === "agent_completed" && terminal.attribution === "agent" && terminal.operational_success === true;
     const endToEndPassed = criteriaPassed && (!agentCompletionRequired || agentCompleted);
     const derivedMatches = Math.abs((summary.artifact_quality_score as number) - artifactQualityScore) <= 1e-12

@@ -470,6 +470,13 @@ test("run request configurations exactly match an experiment declaration", async
   await assert.rejects(validateRepository(drifted.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-configuration-reference"));
 });
 
+test("run repetitions stay within the resolved experiment plan", async () => {
+  const fixture = await campaignRunFixture();
+  fixture.request.repetition = fixture.experiment.repetitions + 1; fixture.result.repetition = fixture.request.repetition; fixture.result.provenance.request_digest = manifestDigest(fixture.request); fixture.campaign.runs[0].digest = manifestDigest(fixture.result);
+  await writeFile(fixture.requestFile, JSON.stringify(fixture.request)); await writeFile(fixture.resultFile, JSON.stringify(fixture.result)); await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.filter((item) => item.code === "semantic/run-repetition").length === 2);
+});
+
 test("Codex invocation full_access matches its sandbox-bypass argv", async () => {
   const bypassed = await campaignRunFixture(); bypassed.request.invocation.argv.push("--dangerously-bypass-approvals-and-sandbox"); bypassed.result.provenance.request_digest = manifestDigest(bypassed.request); bypassed.campaign.runs[0].digest = manifestDigest(bypassed.result); await writeFile(bypassed.requestFile, JSON.stringify(bypassed.request)); await writeFile(bypassed.resultFile, JSON.stringify(bypassed.result)); await writeFile(bypassed.campaignFile, JSON.stringify(bypassed.campaign));
   await assert.rejects(validateRepository(bypassed.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/invocation-full-access"));
@@ -569,6 +576,18 @@ test("run evaluation summaries verify their co-located evaluator artifact", asyn
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-evaluation-digest"));
   fixture.result.evaluation.result_artifact_digest = manifestDigest(fixture.evaluation); await writeFile(fixture.resultFile, JSON.stringify(fixture.result)); fixture.evaluation.checks[0].details = { mutation: true }; await writeFile(fixture.evaluationFile, JSON.stringify(fixture.evaluation));
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-evaluation-digest"));
+});
+
+test("run quality eligibility follows evaluation and terminal failure taxonomy", async () => {
+  const successful = await runEvaluationFixture(); successful.result.evaluation.eligible_for_quality_aggregate = false; await writeFile(successful.resultFile, JSON.stringify(successful.result));
+  await assert.rejects(validateRepository(successful.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-quality-eligibility" && item.message.includes("must be true")));
+
+  const exhausted = await runEvaluationFixture(); exhausted.result.terminal = { reason: "wall_time_exhausted", attribution: "runner", operational_success: false }; await writeFile(exhausted.resultFile, JSON.stringify(exhausted.result));
+  await validateRepository(exhausted.root);
+
+  const providerFailure = await runEvaluationFixture(); providerFailure.result.terminal = { reason: "provider_error", attribution: "provider", operational_success: false }; await writeFile(providerFailure.resultFile, JSON.stringify(providerFailure.result));
+  await assert.rejects(validateRepository(providerFailure.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-quality-eligibility" && item.message.includes("must be false")));
+  providerFailure.result.evaluation.eligible_for_quality_aggregate = false; await writeFile(providerFailure.resultFile, JSON.stringify(providerFailure.result)); await validateRepository(providerFailure.root);
 });
 
 test("successful run evaluations require their co-located evaluator artifact", async () => {
