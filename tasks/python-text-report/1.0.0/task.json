@@ -1,0 +1,44 @@
+{
+  "schema_version": "0.2.0",
+  "id": "python-text-report",
+  "version": "1.0.0",
+  "status": "draft",
+  "title": "Complete a deterministic text report CLI",
+  "summary": "Build a dependency-free Python command that summarizes newline-delimited text input.",
+  "category": "build",
+  "tags": ["cli", "python", "text"],
+  "languages": ["Python"],
+  "prompt": {"path": "tasks/python-text-report/1.0.0/prompt.md"},
+  "problem_state": {
+    "source": {"kind": "directory", "path": "tasks/python-text-report/1.0.0/state"},
+    "digest_algorithm": "tree-sha256-v1"
+  },
+  "environment": {
+    "runtime": {"kind": "host", "platform": "darwin-arm64"},
+    "network": {"mode": "disabled"},
+    "workspace_directory": "/workspace",
+    "setup_commands": [["python3", "-m", "pytest", "-q"]],
+    "variables": {"PYTHONDONTWRITEBYTECODE": "1"},
+    "secret_names": []
+  },
+  "evaluator": {
+    "path": "tasks/python-text-report/1.0.0/evaluator",
+    "command": ["python3", "/evaluator/evaluate.py", "/workspace"],
+    "timeout_seconds": 30,
+    "result_file": "evaluator.json"
+  },
+  "scoring": {
+    "checks": [
+      {"id": "summary-output", "description": "Required summary output is correct for normal input.", "weight": 0.6, "required": true, "agent_visible": true},
+      {"id": "filters-and-order", "description": "Optional prefix filtering and deterministic ordering work.", "weight": 0.25, "required": false, "agent_visible": true},
+      {"id": "input-errors", "description": "Invalid arguments and missing input receive useful errors.", "weight": 0.15, "required": false, "agent_visible": false}
+    ],
+    "pass_threshold": 0.85,
+    "require_agent_completion": true
+  },
+  "default_limits": {
+    "wall_time_seconds": {"value": 480, "enforcement": "hard"},
+    "total_tokens": {"value": 80000, "enforcement": "observe-only"},
+    "tool_calls": {"value": 100, "enforcement": "observe-only"}
+  }
+}
