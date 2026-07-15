@@ -192,12 +192,12 @@ export async function validateRepository(rootInput: string): Promise<void> {
       const checkIds = (asObject(manifest.value.scoring).checks as unknown[]).map((check) => asString(asObject(check).id));
       if (new Set(checkIds).size !== checkIds.length) diagnostics.push({ file: manifest.file, code: "semantic/check-ids", message: "task scoring check IDs must be unique" });
       const sourceKind = asString(source.kind);
-      if (sourceKind === "archive" && typeof source.path !== "string") throw new Error("URI-only archive sources cannot be verified against their declared archive digest");
       const optionalPaths = [typeof source.path === "string" ? source.path : undefined, typeof asObject(manifest.value.calibration ?? {}).evidence_path === "string" ? asString(asObject(manifest.value.calibration ?? {}).evidence_path) : undefined];
       if (sourceKind === "git") for (const patch of (source.patches as unknown[] | undefined) ?? []) optionalPaths.push(asString(asObject(patch).path));
       const paths = [asString(prompt.path), asString(evaluator.path), ...optionalPaths].filter((value): value is string => Boolean(value));
       for (const path of paths) await resolveSafe(root, path);
       if (nonDraft.has(status)) {
+        if (sourceKind === "archive" && typeof source.path !== "string") throw new Error("URI-only archive sources cannot be verified against their declared archive digest");
         if (asString(prompt.path) !== `${taskRoot}/prompt.md` || asString(evaluator.path) !== `${taskRoot}/evaluator`) throw new Error("candidate/released/retired prompt and evaluator must be co-located with its task spec");
         const promptFile = await resolveSafe(root, asString(prompt.path));
         const evaluatorDirectory = await resolveSafe(root, asString(evaluator.path));

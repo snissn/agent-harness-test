@@ -253,11 +253,13 @@ test("candidate git sources remain valid without pretending to materialize them"
   await validateRepository(fixture.root);
 });
 
-test("URI-only archive sources cannot bypass digest verification", async () => {
-  const fixture = await semanticFixture();
-  (fixture.task.problem_state as Record<string, unknown>).source = { kind: "archive", uri: "https://example.test/state.tar", archive_digest: `sha256:${"0".repeat(64)}` };
-  await writeFile(fixture.taskFile, JSON.stringify(fixture.task));
-  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/task-artifact" && item.message.includes("URI-only archive sources")));
+test("draft URI-only archive sources remain valid while non-draft lifecycles require verifiable bytes", async () => {
+  const archive = { kind: "archive", uri: "https://example.test/state.tar", archive_digest: `sha256:${"0".repeat(64)}` };
+  const draft = await semanticFixture(); draft.task.status = "draft"; (draft.task.problem_state as Record<string, unknown>).source = archive; await writeFile(draft.taskFile, JSON.stringify(draft.task)); await validateRepository(draft.root);
+  for (const status of ["candidate", "released", "retired"]) {
+    const fixture = await semanticFixture(); fixture.task.status = status; (fixture.task.problem_state as Record<string, unknown>).source = archive; await writeFile(fixture.taskFile, JSON.stringify(fixture.task));
+    await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/task-artifact" && item.message.includes("URI-only archive sources")));
+  }
 });
 
 test("released and retired task calibration evidence is verified from its bytes", async () => {

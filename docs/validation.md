@@ -27,7 +27,9 @@ filename aliases; repository discovery does not recognize those aliases.
 Task authors should add a failing fixture/test first, update `SPEC.md` and its
 schema before using a new concept, then add the valid manifest/artifacts and
 digest expectations. Candidate/released tasks must have co-located state and
-evaluator trees; released suites reference released tasks and their RFC 8785
+evaluator trees. Draft tasks may declare URI-only archive sources, but candidate,
+released, and retired archive sources require repository-verifiable path bytes.
+Released suites reference released tasks and their RFC 8785
 manifest digests. Campaign, run-request, and run-result experiment/suite/task
 references must resolve the exact loaded manifest path and digest. Run task
 references also pin the TaskSpec prompt, initial-state, and evaluator digests;
