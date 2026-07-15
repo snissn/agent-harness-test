@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -195,6 +195,7 @@ test("contaminated offline captures cannot be quality eligible or scored", async
     assert.equal(result.terminal.reason, "environment_error");
     assert.deepEqual(result.evaluation, { status: "not-run", reason: "workspace evidence contaminated by evaluator fixtures", eligible_for_quality_aggregate: false });
     assert.deepEqual(result.warnings, ["capture contamination"]);
+    await assert.rejects(lstat(join(f.dir, "results/fake-experiment/fake-campaign/runs/run-success/.evaluator-workspace")));
   } finally { await rm(f.dir, { recursive: true, force: true }); }
 });
 test("runner can record unavailable timing without replay milliseconds", async () => {

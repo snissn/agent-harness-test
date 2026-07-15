@@ -836,7 +836,7 @@ export class DeterministicRunner {
       );
     }
     const protectedWorkspace = join(root, ".evaluator-workspace");
-    if (materializationVerified && (await exists(activeWorkspace)))
+    if (materializationVerified && !o.skipEvaluationReason && (await exists(activeWorkspace)))
       await cp(activeWorkspace, protectedWorkspace, {
         recursive: true,
         errorOnExist: true,
