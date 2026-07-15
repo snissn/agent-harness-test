@@ -2,6 +2,7 @@ import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { canonicalJson, manifestDigest, sha256 } from "./digests.js";
+import { isManifestPath, loadManifest } from "./load.js";
 import { SchemaValidator } from "./schema.js";
 
 type Json = Record<string, any>;
@@ -35,6 +36,7 @@ function sanitize(value: unknown, root: string): unknown {
   return value;
 }
 async function json(path: string): Promise<Json> { return JSON.parse(await readFile(path, "utf8")) as Json; }
+async function manifest(path: string): Promise<Json> { return await loadManifest(path) as Json; }
 async function files(root: string): Promise<string[]> {
   const found: string[] = [];
   async function walk(directory: string): Promise<void> {
@@ -124,14 +126,17 @@ CREATE TABLE lineage (campaign_key TEXT, run_id TEXT, parent_run_id TEXT, attemp
   const taskMetadata = new Map<string, Json>();
   const experimentMetadata = new Map<string, Json>();
   const suiteMetadata = new Map<string, Json>();
-  for (const path of (await files(join(root, "tasks"))).filter(path => portable(path).endsWith("/task.json"))) {
-    const task = await json(path); validateSchema(validator, "task", task, path, "schema-invalid-task"); taskMetadata.set(key(task), task);
+  for (const path of (await files(join(root, "tasks"))).filter(path => {
+    const parts = portable(relative(join(root, "tasks"), path)).split("/");
+    return parts.length === 3 && /^task\.(?:json|ya?ml)$/i.test(parts[2] ?? "");
+  })) {
+    const task = await manifest(path); validateSchema(validator, "task", task, path, "schema-invalid-task"); taskMetadata.set(key(task), task);
   }
-  for (const path of (await files(join(root, "experiments"))).filter(path => path.endsWith(".json"))) {
-    const experiment = await json(path); validateSchema(validator, "experiment", experiment, path, "schema-invalid-experiment"); experimentMetadata.set(key(experiment), experiment);
+  for (const path of (await files(join(root, "experiments"))).filter(path => portable(relative(join(root, "experiments"), path)).split("/").length === 2 && isManifestPath(path))) {
+    const experiment = await manifest(path); validateSchema(validator, "experiment", experiment, path, "schema-invalid-experiment"); experimentMetadata.set(key(experiment), experiment);
   }
-  for (const path of (await files(join(root, "suites"))).filter(path => path.endsWith(".json"))) {
-    const suite = await json(path); validateSchema(validator, "suite", suite, path, "schema-invalid-suite"); suiteMetadata.set(key(suite), suite);
+  for (const path of (await files(join(root, "suites"))).filter(path => portable(relative(join(root, "suites"), path)).split("/").length === 2 && isManifestPath(path))) {
+    const suite = await manifest(path); validateSchema(validator, "suite", suite, path, "schema-invalid-suite"); suiteMetadata.set(key(suite), suite);
   }
 
   const errors: Json[] = [];
@@ -203,7 +208,12 @@ CREATE TABLE lineage (campaign_key TEXT, run_id TEXT, parent_run_id TEXT, attemp
           if (!suiteTask || suiteTask.spec_digest !== run.task.spec_digest || run.task.prompt_digest !== task.prompt.digest || run.task.initial_tree_digest !== task.problem_state.expected_tree_digest || run.task.evaluator_digest !== task.evaluator.digest) throw new SourceError("reference-invalid", "run task provenance does not match suite/task metadata");
           const declaredConfiguration = experiment.configurations.find((configuration: Json) => configuration.id === run.configuration_id);
           if (!declaredConfiguration) throw new SourceError("reference-invalid", "run configuration is not declared by experiment");
-          if (!equal(run.resolved_configuration.harness, declaredConfiguration.harness) || !equal({ provider: run.resolved_configuration.model.provider, requested_id: run.resolved_configuration.model.requested_id }, declaredConfiguration.model) || !equal(run.resolved_configuration.effort, declaredConfiguration.effort) || !equal(run.resolved_configuration.limits, declaredConfiguration.limits)) throw new SourceError("reference-invalid", "resolved run configuration does not match experiment declaration");
+          const resolvedModel = run.resolved_configuration.model;
+          const declaredModel = declaredConfiguration.model;
+          const modelMatches = resolvedModel.provider === declaredModel.provider
+            && resolvedModel.requested_id === declaredModel.requested_id
+            && (declaredModel.expected_snapshot_id === undefined || (resolvedModel.snapshot_available === true && resolvedModel.resolved_id === declaredModel.expected_snapshot_id));
+          if (!equal(run.resolved_configuration.harness, declaredConfiguration.harness) || !modelMatches || !equal(run.resolved_configuration.effort, declaredConfiguration.effort) || !equal(run.resolved_configuration.limits, declaredConfiguration.limits)) throw new SourceError("reference-invalid", "resolved run configuration does not match experiment declaration");
 
           let requestSeen = false;
           let evaluatorSeen = false;
@@ -215,7 +225,22 @@ CREATE TABLE lineage (campaign_key TEXT, run_id TEXT, parent_run_id TEXT, attemp
             if (artifact.kind === "request") {
               const request = JSON.parse(content.toString("utf8")) as Json;
               validateSchema(validator, "run-request", request, artifactPath, "schema-invalid-artifact");
-              if (request.run_id !== run.run_id || request.campaign_id !== run.campaign_id || request.configuration.id !== run.configuration_id || !equal(request.configuration, declaredConfiguration) || !equal(request.experiment, run.experiment) || !equal(request.suite, run.suite) || !equal(request.task, run.task) || !equal(request.attempt, run.attempt) || !equal(request.execution, run.provenance.execution) || manifestDigest(request) !== run.provenance.request_digest) throw new SourceError("reference-invalid", "request artifact identity/digest does not match run");
+              const requestChecks = {
+                run_id: request.run_id === run.run_id,
+                campaign_id: request.campaign_id === run.campaign_id,
+                repetition: request.repetition === run.repetition,
+                schedule_index: request.schedule_index === run.schedule_index,
+                configuration_id: request.configuration.id === run.configuration_id,
+                configuration: equal(request.configuration, declaredConfiguration),
+                experiment: equal(request.experiment, run.experiment),
+                suite: equal(request.suite, run.suite),
+                task: equal(request.task, run.task),
+                attempt: equal(request.attempt, run.attempt),
+                execution: equal(request.execution, run.provenance.execution),
+                digest: manifestDigest(request) === run.provenance.request_digest,
+              };
+              const requestMismatches = Object.entries(requestChecks).filter(([, matches]) => !matches).map(([field]) => field);
+              if (requestMismatches.length > 0) throw new SourceError("reference-invalid", `request artifact does not match run: ${requestMismatches.join(", ")}`);
               requestSeen = true;
             }
             if (artifact.kind === "evaluator-result") {

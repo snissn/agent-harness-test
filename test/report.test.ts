@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import { stringify } from "yaml";
 import { manifestDigest, sha256 } from "../src/digests.js";
 import { rebuildReport, weightedSuiteHeadline } from "../src/report.js";
 
@@ -57,6 +58,20 @@ async function mutateRun(root: string, runId: string, mutate: (run: Json) => voi
   await restampRun(root, runId, run);
 }
 
+async function mutateRequest(root: string, runId: string, mutate: (request: Json) => void): Promise<void> {
+  const run = await readJson(runPath(root, runId));
+  const requestArtifact = run.artifacts.find((artifact: Json) => artifact.kind === "request");
+  const requestPath = join(root, campaignRelative, requestArtifact.path);
+  const request = await readJson(requestPath);
+  mutate(request);
+  await writeJson(requestPath, request);
+  const content = await readFile(requestPath);
+  requestArtifact.digest = `sha256:${sha256(content)}`;
+  requestArtifact.bytes = content.byteLength;
+  run.provenance.request_digest = manifestDigest(request);
+  await restampRun(root, runId, run);
+}
+
 async function mutateExperiment(root: string, mutate: (experiment: Json) => void): Promise<void> {
   const path = join(root, "experiments", experimentId, "1.0.0.json");
   const experiment = await readJson(path);
@@ -74,6 +89,7 @@ async function mutateExperiment(root: string, mutate: (experiment: Json) => void
     const requestPath = join(root, campaignRelative, requestArtifact.path);
     const request = await readJson(requestPath);
     request.experiment = reference;
+    request.configuration = experiment.configurations.find((configuration: Json) => configuration.id === run.configuration_id);
     await writeJson(requestPath, request);
     const requestContent = await readFile(requestPath);
     requestArtifact.digest = `sha256:${sha256(requestContent)}`;
@@ -224,7 +240,7 @@ async function addFullyIncompatibleHistory(root: string): Promise<void> {
   request.experiment = experimentReference;
   request.suite = suiteReference;
   request.task = taskReference;
-  request.configuration = experiment.configurations[0];
+  request.configuration = experiment.configurations.find((configuration: Json) => configuration.id === run.configuration_id);
   request.execution = run.provenance.execution;
   await writeJson(requestPath, request);
   const requestContent = await readFile(requestPath);
@@ -243,6 +259,57 @@ async function addFullyIncompatibleHistory(root: string): Promise<void> {
   await writeJson(runFile, run);
   campaign.runs[0].digest = manifestDigest(run);
   await writeJson(join(directory, "campaign.json"), campaign);
+}
+
+async function convertCanonicalMetadataToYaml(root: string): Promise<void> {
+  const taskJsonPath = join(root, "tasks/python-text-report/1.0.0/task.json");
+  const taskYamlPath = join(root, "tasks/python-text-report/1.0.0/task.yaml");
+  const suiteJsonPath = join(root, "suites/first-codex-slice/1.0.0.json");
+  const suiteYamlPath = join(root, "suites/first-codex-slice/1.0.0.yml");
+  const experimentJsonPath = join(root, "experiments", experimentId, "1.0.0.json");
+  const experimentYamlPath = join(root, "experiments", experimentId, "1.0.0.yaml");
+
+  const task = await readJson(taskJsonPath);
+  await writeFile(taskYamlPath, stringify(task));
+  await rm(taskJsonPath);
+  const taskReference = { id: task.id, version: task.version, spec_path: "tasks/python-text-report/1.0.0/task.yaml", spec_digest: manifestDigest(task), prompt_digest: task.prompt.digest, initial_tree_digest: task.problem_state.expected_tree_digest, evaluator_digest: task.evaluator.digest };
+
+  const suite = await readJson(suiteJsonPath);
+  suite.tasks[0].spec_path = taskReference.spec_path;
+  await writeFile(suiteYamlPath, stringify(suite));
+  await rm(suiteJsonPath);
+  const suiteReference = { id: suite.id, version: suite.version, spec_path: "suites/first-codex-slice/1.0.0.yml", spec_digest: manifestDigest(suite) };
+
+  const experiment = await readJson(experimentJsonPath);
+  experiment.suite = suiteReference;
+  await writeFile(experimentYamlPath, stringify(experiment));
+  await rm(experimentJsonPath);
+  const experimentReference = { id: experiment.id, version: experiment.version, spec_path: `experiments/${experimentId}/1.0.0.yaml`, spec_digest: manifestDigest(experiment) };
+
+  const campaign = await readJson(campaignPath(root));
+  campaign.experiment = experimentReference;
+  campaign.suite = suiteReference;
+  for (const runReference of campaign.runs) {
+    const path = runPath(root, runReference.run_id);
+    const run = await readJson(path);
+    run.experiment = experimentReference;
+    run.suite = suiteReference;
+    run.task = taskReference;
+    const requestArtifact = run.artifacts.find((artifact: Json) => artifact.kind === "request");
+    const requestPath = join(root, campaignRelative, requestArtifact.path);
+    const request = await readJson(requestPath);
+    request.experiment = experimentReference;
+    request.suite = suiteReference;
+    request.task = taskReference;
+    await writeJson(requestPath, request);
+    const requestContent = await readFile(requestPath);
+    requestArtifact.digest = `sha256:${sha256(requestContent)}`;
+    requestArtifact.bytes = requestContent.byteLength;
+    run.provenance.request_digest = manifestDigest(request);
+    await writeJson(path, run);
+    runReference.digest = manifestDigest(run);
+  }
+  await writeJson(campaignPath(root), campaign);
 }
 
 test("suite headline averages repetitions per task before applying declared task weights", () => {
@@ -267,6 +334,48 @@ test("campaign discovery ignores nested workspace campaign files", async () => {
     assert.equal(data.ingestion_errors.length, 0);
     assert.doesNotMatch(await readFile(result.data, "utf8"), /SECRET_SENTINEL/);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("expected model snapshots accept the matching resolved snapshot", async () => {
+  const root = await fixture();
+  try {
+    await mutateExperiment(root, experiment => {
+      experiment.configurations.find((configuration: Json) => configuration.id === "codex-medium").model.expected_snapshot_id = "gpt-5.6-sol-2026-07-01";
+    });
+    await mutateRun(root, "codex-codex-medium-r1", run => {
+      run.resolved_configuration.model.snapshot_available = true;
+      run.resolved_configuration.model.resolved_id = "gpt-5.6-sol-2026-07-01";
+    });
+    const result = await rebuildReport(root);
+    const data = await readJson(result.data);
+    assert.equal(result.runs, 2, JSON.stringify(data.ingestion_errors));
+    assert.equal(result.invalid, 0, JSON.stringify(data.ingestion_errors));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("canonical task, suite, and experiment YAML/YML manifests rebuild successfully", async () => {
+  const root = await fixture();
+  try {
+    await convertCanonicalMetadataToYaml(root);
+    const result = await rebuildReport(root);
+    assert.equal(result.runs, 2);
+    assert.equal(result.invalid, 0);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("request plan coordinates must match the retained run", async () => {
+  for (const coordinate of ["repetition", "schedule_index"] as const) {
+    const root = await fixture();
+    try {
+      await mutateRequest(root, "codex-codex-medium-r1", request => { request[coordinate] += 1; });
+      const result = await rebuildReport(root);
+      const data = await readJson(result.data);
+      assert.equal(result.runs, 1, coordinate);
+      assert.equal(result.invalid, 1, coordinate);
+      assert.equal(data.ingestion_errors[0].code, "reference-invalid", coordinate);
+      assert.match(data.ingestion_errors[0].message, new RegExp(coordinate));
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
 });
 
 test("deterministic rebuild renders every required report section and smoke qualification", async () => {
