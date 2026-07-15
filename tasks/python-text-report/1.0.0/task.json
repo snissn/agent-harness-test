@@ -17,7 +17,7 @@
     "runtime": {"kind": "host", "platform": "darwin-arm64"},
     "network": {"mode": "disabled"},
     "workspace_directory": "/workspace",
-    "setup_commands": [["python3", "-m", "pytest", "-q"]],
+    "setup_commands": [],
     "variables": {"PYTHONDONTWRITEBYTECODE": "1"},
     "secret_names": []
   },
