@@ -56,8 +56,9 @@ require provider credentials.
 
 Resolved requests must also agree with deterministic control-plane provenance:
 Codex `invocation.full_access` exactly tracks the documented sandbox-bypass argv
-flag, and invocation runtime version/package/executable fingerprints must match
-one owning-campaign preflight entry for the request's harness and runtime source.
+flag. The owning campaign must pin the request's exact experiment and suite, and
+its preflight must match the invocation runtime version/package/executable
+fingerprints for the request's harness and runtime source.
 
 GitHub Actions runs the same fresh-install commands on pull requests and pushes
 to `main`, with read-only repository permissions.

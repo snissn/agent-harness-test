@@ -345,14 +345,18 @@ export async function validateRepository(rootInput: string): Promise<void> {
       const campaign = byKindIdentity.get(`campaign:${asString(manifest.value.campaign_id)}`);
       if (!campaign) diagnostics.push({ file: manifest.file, code: "semantic/campaign-preflight", message: `run request requires campaign ${asString(manifest.value.campaign_id)} to verify invocation preflight` });
       else {
-        const preflight = asObject(campaign.value.preflight), resolutions = preflight.harness_runtimes as unknown[];
-        const matchesPreflight = resolutions.some((item) => { const resolution = asObject(item); return resolution.harness_family === harness.family
-          && resolution.runtime_source === invocation.runtime_source
-          && resolution.requested_runtime === invocation.requested_runtime
-          && resolution.resolved_runtime_version === invocation.resolved_runtime_version
-          && resolution.runtime_digest === invocation.runtime_digest
-          && resolution.executable_digest === invocation.executable_digest; });
-        if (!matchesPreflight) diagnostics.push({ file: manifest.file, code: "semantic/campaign-preflight", message: `run invocation does not match campaign preflight for ${asString(harness.family)}` });
+        const ownsRequest = manifestDigest(experimentReference) === manifestDigest(campaign.value.experiment) && manifestDigest(suiteReference) === manifestDigest(campaign.value.suite);
+        if (!ownsRequest) diagnostics.push({ file: manifest.file, code: "semantic/campaign-preflight", message: "run request experiment and suite must match its owning campaign before preflight validation" });
+        else {
+          const preflight = asObject(campaign.value.preflight), resolutions = preflight.harness_runtimes as unknown[];
+          const matchesPreflight = resolutions.some((item) => { const resolution = asObject(item); return resolution.harness_family === harness.family
+            && resolution.runtime_source === invocation.runtime_source
+            && resolution.requested_runtime === invocation.requested_runtime
+            && resolution.resolved_runtime_version === invocation.resolved_runtime_version
+            && resolution.runtime_digest === invocation.runtime_digest
+            && resolution.executable_digest === invocation.executable_digest; });
+          if (!matchesPreflight) diagnostics.push({ file: manifest.file, code: "semantic/campaign-preflight", message: `run invocation does not match campaign preflight for ${asString(harness.family)}` });
+        }
       }
     }
   }

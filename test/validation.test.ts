@@ -495,6 +495,14 @@ test("run invocation runtime fingerprints match campaign preflight", async () =>
   }
 });
 
+test("run requests only use preflight from campaigns with matching experiment and suite pins", async () => {
+  const matching = await campaignRunFixture(); await validateRepository(matching.root);
+  for (const field of ["experiment", "suite"]) {
+    const fixture = await campaignRunFixture(); fixture.request[field].spec_digest = `sha256:${"0".repeat(64)}`; await writeFile(fixture.requestFile, JSON.stringify(fixture.request));
+    await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/campaign-preflight" && item.message.includes("experiment and suite must match")));
+  }
+});
+
 test("run requests require their owning campaign preflight", async () => {
   const fixture = await campaignRunFixture();
   await unlink(fixture.campaignFile);
