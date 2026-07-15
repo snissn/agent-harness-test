@@ -520,6 +520,9 @@ function evaluationSummary(
       id: receivedCheck.id,
       score: receivedCheck.score,
       passed: receivedCheck.passed,
+      ...(typeof receivedCheck.message === "string"
+        ? { message: receivedCheck.message }
+        : {}),
       weight: c.weight,
       required: c.required,
     };
