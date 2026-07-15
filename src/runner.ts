@@ -13,6 +13,15 @@ export const TERMINAL_ATTRIBUTION: Record<TerminalReason, Attribution> = { agent
 export class AttemptState { state: RunnerState = "new"; transition(next: RunnerState): void { if (!transitions[this.state].includes(next)) throw new RunnerError("runner.illegal-transition", `${this.state} cannot transition to ${next}`); this.state = next; } fail(): void { this.transition("failed"); } finalize(): void { if (!transitions[this.state].includes("finalized")) throw new RunnerError("runner.illegal-transition", `${this.state} cannot transition to finalized`); this.state = "finalized"; } }
 export interface HarnessResult { terminal: TerminalReason; stdout?: string; stderr?: string; events?: unknown[]; finalMessage?: string; exitCode?: number | null; signal?: string; tokens?: Record<string, unknown>; toolUsage?: Record<string, unknown>; cost?: Record<string, unknown>; }
 export interface HarnessAdapter { run(input: { workspace: string; prompt: string; request: Record<string, any>; signal: AbortSignal }): Promise<HarnessResult>; }
+/** Process adapters must implement terminate when their child can outlive an AbortSignal. */
+export interface ControlledHarnessAdapter extends HarnessAdapter { terminate?(reason: "wall_time_exhausted"): Promise<void>; }
+export interface Timer { set(delayMs: number, callback: () => void): unknown; clear(handle: unknown): void; }
+export const systemTimer: Timer = { set: (delayMs, callback) => setTimeout(callback, delayMs), clear: (handle) => clearTimeout(handle as NodeJS.Timeout) };
+export async function runWithHardTimeout(adapter: ControlledHarnessAdapter, input: Parameters<HarnessAdapter["run"]>[0], timeoutMs: number, timer: Timer = systemTimer): Promise<HarnessResult> {
+  const controller = new AbortController(); const run = adapter.run({ ...input, signal: controller.signal });
+  let handle: unknown; const exhausted = new Promise<HarnessResult>((resolve) => { handle = timer.set(timeoutMs, () => { controller.abort(); void adapter.terminate?.("wall_time_exhausted"); resolve({ terminal: "wall_time_exhausted", events: [{ type: "runner.timeout" }], stderr: "hard wall time exhausted", exitCode: null }); }); });
+  try { return await Promise.race([run, exhausted]); } finally { timer.clear(handle); void run.catch(() => undefined); }
+}
 export interface Evaluator { evaluate(input: { workspace: string; request: Record<string, any> }): Promise<Record<string, any>>; }
 export class FakeHarnessAdapter implements HarnessAdapter {
   constructor(private readonly scenario: "success" | "timeout" | "token-limit" | "tool-limit" | "malformed-stream" | "provider-error" | "harness-error" | "cancelled" = "success", private readonly delayMs = 0) {}
