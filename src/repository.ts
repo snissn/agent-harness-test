@@ -96,7 +96,11 @@ async function canonicalArtifactDirectories(tasksDirectory: string): Promise<str
 }
 
 function insideExamples(root: string, file: string): boolean { return relative(root, file).split(sep).join("/").startsWith("spec/examples/"); }
-function manifestOwnedPath(file: string): boolean { const parts = file.replace(/^\.\//, "").split(/[\\/]/); return parts[0] === "tasks" || parts[0] === "suites" || parts[0] === "experiments"; }
+function manifestOwnedPath(file: string): boolean {
+  const parts = file.replace(/^\.\//, "").split(/[\\/]/);
+  const reportProjection = parts[0] === "results" && parts[3] === "reports";
+  return parts[0] === "tasks" || parts[0] === "suites" || parts[0] === "experiments" || (parts[0] === "results" && !reportProjection);
+}
 function campaignIdentity(value: ObjectValue): string { return `${asString(asObject(value.experiment).id)}/${asString(value.campaign_id)}`; }
 function identity(manifest: Manifest): string | undefined {
   if (["task", "suite", "experiment"].includes(manifest.kind)) return `${asString(manifest.value.id)}@${asString(manifest.value.version)}`;
@@ -337,6 +341,7 @@ export async function validateRepository(rootInput: string): Promise<void> {
     const experimentReference = asObject(campaign.value.experiment), suiteReference = asObject(campaign.value.suite);
     const experiment = validateSpecReference(campaign, experimentReference, "experiment", experimentByIdentity);
     const suite = validateSpecReference(campaign, suiteReference, "suite", suiteByIdentity);
+    if (experiment && campaign.value.mode !== experiment.value.mode) diagnostics.push({ file: campaign.file, code: "semantic/campaign-mode", message: "campaign mode must match its resolved experiment mode" });
     const suiteMatchesExperiment = experiment && suite && manifestDigest(suiteReference) === manifestDigest(experiment.value.suite);
     if (experiment && suite && !suiteMatchesExperiment) diagnostics.push({ file: campaign.file, code: "semantic/experiment-suite", message: "campaign suite does not match the experiment's pinned suite" });
     if (experiment && suite && suiteMatchesExperiment) {

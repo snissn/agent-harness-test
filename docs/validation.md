@@ -14,9 +14,11 @@ npm run validate
 `npm run validate` loads canonical checked-in JSON/YAML manifests under the
 repository layout plus all structural examples. Suite and experiment manifests
 must use their versioned canonical paths; task and result source manifests must
-use the complete canonical layouts defined in `SPEC.md`. JSON files under any
-`reports/` directory are never inferred as source manifests, even when their
-name or nested directories resemble one. Validation rejects duplicate keys, YAML tags,
+use the complete canonical layouts defined in `SPEC.md`. Noncanonical JSON/YAML
+manifest paths beneath `results/` are rejected unless they are under the canonical
+`results/<experiment-id>/<campaign-id>/reports/` projection directory; report
+projections are never inferred as source manifests, even when their name or nested
+directories resemble one. Validation rejects duplicate keys, YAML tags,
 anchors, aliases, merge keys, non-string mapping keys, non-JSON YAML values,
 unsafe/escaping paths, schema errors, and the implemented
 cross-file invariants. Diagnostics use `file [rule] path: message` and exit
@@ -43,7 +45,8 @@ manifest digests. Campaign, run-request, and run-result experiment/suite/task
 references must resolve the exact loaded manifest path and digest. Run task
 references also pin the TaskSpec prompt, initial-state, and evaluator digests.
 Campaign identity is scoped by experiment ID and campaign ID, matching the
-canonical `results/<experiment-id>/<campaign-id>/` layout. Run-request workspace
+canonical `results/<experiment-id>/<campaign-id>/` layout, and campaign mode must
+match its resolved experiment mode. Run-request workspace
 fingerprints and network policy must exactly agree with the
 same TaskSpec. For OCI tasks, both request execution digest fields must equal the
 TaskSpec runtime image digest. Campaign and run suites must equal their

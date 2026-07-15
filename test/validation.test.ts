@@ -459,6 +459,18 @@ test("canonical campaign and run result artifacts are discovered and schema-vali
   await assert.rejects(validateRepository(fixture), (error: unknown) => error instanceof ValidationError && ["campaign.json", "request.json", "run.json", "evaluator.json"].every((name) => error.diagnostics.some((item) => item.file.endsWith(name) && item.code === "schema/required")));
 });
 
+test("non-report result manifest paths are rejected while reports remain exempt", async () => {
+  const fixture = await mkdtemp(join(tmpdir(), "aht-repo-")); await cp(join(root, "spec/schemas"), join(fixture, "spec/schemas"), { recursive: true }); await mkdir(join(fixture, "spec/examples"), { recursive: true });
+  const campaignDirectory = join(fixture, "results/demo/campaign"); await mkdir(join(campaignDirectory, "reports"), { recursive: true }); await mkdir(join(fixture, "results/demo/reports"), { recursive: true });
+  const unknownPaths = ["results/demo/campaign/campaign.yaml", "results/demo/campaign/request.json", "results/demo/reports/campaign.yaml"];
+  for (const path of unknownPaths) await writeFile(join(fixture, path), "{ not a manifest }");
+  await writeFile(join(campaignDirectory, "reports/request.json"), "{ not a manifest }");
+  await assert.rejects(validateRepository(fixture), (error: unknown) => error instanceof ValidationError
+    && error.diagnostics.length === unknownPaths.length
+    && unknownPaths.every((path) => error.diagnostics.some((item) => item.file.endsWith(`/${path}`) && item.code === "semantic/unknown-manifest"))
+    && !error.diagnostics.some((item) => item.file.includes("/results/demo/campaign/reports/")));
+});
+
 test("campaign and run manifest paths match their declared identities", async () => {
   const fixture = await campaignRunFixture(); const { campaign, campaignFile, request, requestFile, result, resultFile } = fixture; await validateRepository(fixture.root);
   campaign.experiment.id = "other-experiment"; await writeFile(campaignFile, JSON.stringify(campaign)); await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/campaign-identity"));
@@ -478,6 +490,29 @@ test("campaign experiment and suite references resolve exact manifests", async (
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/experiment-digest"));
   fixture.campaign.experiment.spec_digest = fixture.request.experiment.spec_digest; fixture.campaign.suite.id = "missing-suite"; await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign));
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/suite-reference"));
+});
+
+test("campaign mode must match its resolved experiment mode", async () => {
+  for (const [experimentMode, campaignMode] of [["smoke", "benchmark"], ["benchmark", "smoke"]] as const) {
+    const fixture = await campaignRunFixture();
+    fixture.experiment.mode = experimentMode;
+    if (experimentMode === "benchmark") {
+      fixture.experiment.repetitions = 5;
+      fixture.experiment.ordering = { mode: "randomized", seed: 1 };
+      fixture.campaign.planned_run_count = 10;
+    }
+    await writeFile(fixture.experimentFile, JSON.stringify(fixture.experiment));
+    const experimentDigest = manifestDigest(fixture.experiment);
+    for (const manifest of [fixture.campaign, fixture.request, fixture.result]) manifest.experiment.spec_digest = experimentDigest;
+    fixture.campaign.mode = campaignMode;
+    fixture.result.provenance.request_digest = manifestDigest(fixture.request);
+    fixture.campaign.runs[0].digest = manifestDigest(fixture.result);
+    await writeFile(fixture.requestFile, JSON.stringify(fixture.request));
+    await writeFile(fixture.resultFile, JSON.stringify(fixture.result));
+    await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign));
+    await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError
+      && error.diagnostics.some((item) => item.file.endsWith("/campaign.json") && item.code === "semantic/campaign-mode"));
+  }
 });
 
 test("campaign planned runs derive from selected tasks, configurations, and repetitions", async () => {
