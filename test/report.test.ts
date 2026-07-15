@@ -162,7 +162,7 @@ async function addDuplicateCampaignIdInAnotherExperiment(root: string): Promise<
   const campaign = {
     ...originalCampaign,
     experiment: { id: alternateId, version: "1.0.0", spec_path: `experiments/${alternateId}/1.0.0.json`, spec_digest: manifestDigest(experiment) },
-    planned_run_count: 1,
+    planned_run_count: 2,
     runs: [],
     summary: { recorded_runs: 0, operational_successes: 0, quality_eligible_runs: 0, end_to_end_passes: 0, invalid_runs: 0 },
     warnings: ["synthetic empty campaign used to test scoped identity"],
@@ -523,6 +523,35 @@ test("tampered run evaluation summaries are quarantined before aggregation", asy
     assert.equal(result.invalid, 1);
     assert.equal(data.ingestion_errors[0].code, "evaluation-mismatch");
     assert.equal(data.configurations.some((configuration: Json) => configuration.configuration_id === "codex-medium"), false);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("terminal reason, attribution, and operational success must form a valid tuple", async () => {
+  const root = await fixture();
+  try {
+    await mutateRun(root, "codex-codex-medium-r1", run => { run.terminal.attribution = "runner"; });
+    const result = await rebuildReport(root);
+    const data = await readJson(result.data);
+    assert.equal(result.runs, 1);
+    assert.equal(result.invalid, 1);
+    assert.equal(data.ingestion_errors[0].code, "terminal-invalid");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("completed campaigns must cover every planned initial matrix cell", async () => {
+  const root = await fixture();
+  try {
+    const campaign = await readJson(campaignPath(root));
+    campaign.status = "completed";
+    campaign.runs = campaign.runs.filter((reference: Json) => reference.run_id === "codex-codex-medium-r1");
+    campaign.summary = { recorded_runs: 1, operational_successes: 1, quality_eligible_runs: 1, end_to_end_passes: 1, invalid_runs: 0 };
+    await writeJson(campaignPath(root), campaign);
+    const result = await rebuildReport(root);
+    const data = await readJson(result.data);
+    assert.equal(result.runs, 0);
+    assert.equal(result.invalid, 1);
+    assert.equal(data.ingestion_errors[0].code, "campaign-coverage");
+    assert.equal(data.campaigns.length, 0);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

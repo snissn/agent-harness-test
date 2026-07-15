@@ -8,6 +8,12 @@ import { SchemaValidator } from "./schema.js";
 type Json = Record<string, any>;
 
 export const REPORT_DATA_VERSION = "0.1.0";
+const terminalAttribution: Record<string, string> = {
+  agent_completed: "agent", agent_failed: "agent",
+  wall_time_exhausted: "runner", token_limit_exhausted: "runner", tool_limit_exhausted: "runner",
+  provider_error: "provider", harness_error: "harness", environment_error: "environment", runner_error: "runner",
+  cancelled: "operator",
+};
 
 class SourceError extends Error {
   constructor(readonly code: string, message: string) { super(message); }
@@ -133,6 +139,12 @@ function verifyEvaluationSummary(task: Json, evaluator: Json, run: Json): void {
   if (!derivedMatches) throw new SourceError("evaluation-mismatch", "run evaluation summary does not match evaluator output, task scoring, and terminal state");
 }
 
+function verifyTerminal(run: Json): void {
+  const expectedAttribution = terminalAttribution[run.terminal.reason];
+  const expectedOperationalSuccess = run.terminal.reason === "agent_completed";
+  if (run.terminal.attribution !== expectedAttribution || run.terminal.operational_success !== expectedOperationalSuccess) throw new SourceError("terminal-invalid", `terminal ${run.terminal.reason} requires attribution ${expectedAttribution} and operational_success ${expectedOperationalSuccess}`);
+}
+
 export interface RebuildResult { database: string; data: string; html: string; invalid: number; runs: number; }
 
 /** Rebuilds a disposable projection. Source artifacts are never modified. */
@@ -196,6 +208,7 @@ CREATE TABLE lineage (campaign_key TEXT, run_id TEXT, parent_run_id TEXT, attemp
     for (const campaignPath of campaignFiles) {
       let campaign: Json;
       let experiment: Json;
+      const campaignDir = resolve(campaignPath, "..");
       try {
         campaign = await json(campaignPath);
         validateSchema(validator, "campaign", campaign, campaignPath, "schema-invalid-campaign");
@@ -204,13 +217,29 @@ CREATE TABLE lineage (campaign_key TEXT, run_id TEXT, parent_run_id TEXT, attemp
         experiment = referencedExperiment;
         const suite = suiteMetadata.get(key(campaign.suite));
         if (!suite || manifestDigest(suite) !== campaign.suite.spec_digest || !equal(experiment.suite, campaign.suite)) throw new SourceError("reference-invalid", "campaign suite reference/digest is invalid");
+        const selection = experiment.task_selection;
+        const selectedTasks = suite.tasks.filter((task: Json) => selection?.include ? selection.include.includes(task.id) : selection?.exclude ? !selection.exclude.includes(task.id) : true);
+        const expectedCoordinates = new Set<string>();
+        for (const task of selectedTasks) for (const configuration of experiment.configurations) for (let repetition = 1; repetition <= experiment.repetitions; repetition += 1) expectedCoordinates.add(`${task.id}@${task.version}/${configuration.id}/${repetition}`);
+        if (campaign.planned_run_count !== expectedCoordinates.size) throw new SourceError("campaign-plan", `campaign planned_run_count must be ${expectedCoordinates.size}`);
+        if (campaign.status === "completed") {
+          const recordedCoordinates = new Set<string>();
+          for (const reference of campaign.runs) {
+            const referencedPath = resolve(campaignDir, reference.path);
+            if (!within(campaignDir, referencedPath)) throw new SourceError("campaign-coverage", "completed campaign run reference escapes campaign");
+            const referencedRun = await json(referencedPath);
+            validateSchema(validator, "run-result", referencedRun, referencedPath, "campaign-coverage");
+            if (manifestDigest(referencedRun) !== reference.digest || referencedRun.run_id !== reference.run_id || referencedRun.campaign_id !== campaign.campaign_id) throw new SourceError("campaign-coverage", "completed campaign contains an invalid run reference");
+            if (referencedRun.attempt.mode === "initial") recordedCoordinates.add(`${referencedRun.task.id}@${referencedRun.task.version}/${referencedRun.configuration_id}/${referencedRun.repetition}`);
+          }
+          if (recordedCoordinates.size !== expectedCoordinates.size || [...expectedCoordinates].some(coordinate => !recordedCoordinates.has(coordinate))) throw new SourceError("campaign-coverage", `completed campaign must cover all ${expectedCoordinates.size} planned initial cells`);
+        }
       } catch (error) {
         const detail = sourceError(error, "invalid-campaign");
         errors.push({ source: portable(relative(root, campaignPath)), ...detail });
         continue;
       }
 
-      const campaignDir = resolve(campaignPath, "..");
       const experimentKey = key(campaign.experiment);
       const campaignKey = `${experimentKey}:${campaign.campaign_id}`;
       try {
@@ -239,6 +268,7 @@ CREATE TABLE lineage (campaign_key TEXT, run_id TEXT, parent_run_id TEXT, attemp
           if (manifestDigest(run) !== ref.digest) throw new SourceError("digest-mismatch", "run digest does not match campaign reference");
           if (run.campaign_id !== campaign.campaign_id || run.run_id !== ref.run_id) throw new SourceError("reference-invalid", "run identity does not match campaign reference");
           if (!equal(run.experiment, campaign.experiment) || !equal(run.suite, campaign.suite)) throw new SourceError("reference-invalid", "run experiment/suite reference does not match campaign");
+          verifyTerminal(run);
           derivedSummary.recorded_runs += 1;
           derivedSummary.operational_successes += run.terminal.operational_success === true ? 1 : 0;
           derivedSummary.quality_eligible_runs += run.evaluation?.eligible_for_quality_aggregate === true ? 1 : 0;
