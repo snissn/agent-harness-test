@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { DeterministicRunner, FakeHarnessAdapter } from "./runner.js";
 import { sha256 } from "./digests.js";
 const [command, ...args] = process.argv.slice(2);
+const runnerGitCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+  encoding: "utf8",
+}).trim();
 if (command === "inspect") {
   const [runDirectory] = args;
   if (!runDirectory)
@@ -70,6 +74,7 @@ if (command === "inspect") {
       }),
     },
     taskChecks: [{ id: "fixture", weight: 1, required: true }],
+    runnerGitCommit,
   });
   console.log(
     JSON.stringify({ run_id: result.run_id, terminal: result.terminal.reason }),
@@ -112,6 +117,7 @@ if (command === "inspect") {
       }),
     },
     taskChecks: [{ id: "fixture", weight: 1, required: true }],
+    runnerGitCommit,
   });
   console.log(
     JSON.stringify({ run_id: result.run_id, terminal: result.terminal.reason }),

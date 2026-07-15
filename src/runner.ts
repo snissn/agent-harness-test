@@ -354,7 +354,11 @@ function unavailable(source: string, reason: string): Record<string, unknown> {
 }
 function evaluationSummary(
   raw: Record<string, unknown>,
-  checks: Array<Record<string, unknown>>,
+  policy: {
+    checks: Array<Record<string, unknown>>;
+    pass_threshold?: number;
+    require_agent_completion?: boolean;
+  },
   terminal: TerminalReason,
   attempt: Record<string, unknown>,
   digest: string,
@@ -369,7 +373,22 @@ function evaluationSummary(
     ? (raw.checks as Array<Record<string, unknown>>)
     : [];
   const got = new Map(received.map((c) => [c.id, c]));
-  if (got.size !== checks.length || checks.some((c) => !got.has(c.id)))
+  const checks = policy.checks;
+  if (
+    !checks.length ||
+    checks.some(
+      (c) => !Number.isFinite(Number(c.weight)) || Number(c.weight) <= 0,
+    ) ||
+    received.some(
+      (c) =>
+        !Number.isFinite(Number(c.score)) ||
+        Number(c.score) < 0 ||
+        Number(c.score) > 1,
+    ) ||
+    new Set(received.map((c) => c.id)).size !== received.length ||
+    got.size !== checks.length ||
+    checks.some((c) => !got.has(c.id))
+  )
     return {
       status: "error",
       reason: "evaluator check IDs do not exactly match task checks",
@@ -383,9 +402,9 @@ function evaluationSummary(
   const quality =
     entries.reduce((n, c) => n + Number(c.score) * Number(c.weight), 0) /
     entries.reduce((n, c) => n + Number(c.weight), 0);
-  const criteria = entries
-    .filter((c) => c.required)
-    .every((c) => c.passed === true);
+  const criteria =
+    entries.filter((c) => c.required).every((c) => c.passed === true) &&
+    quality >= (policy.pass_threshold ?? 1);
   const eligible =
     attempt.mode === "initial" &&
     [
@@ -401,8 +420,12 @@ function evaluationSummary(
     checks: entries,
     artifact_quality_score: quality,
     criteria_passed: criteria,
-    agent_completion_required: true,
-    end_to_end_passed: criteria && terminal === "agent_completed" && eligible,
+    agent_completion_required: policy.require_agent_completion ?? true,
+    end_to_end_passed:
+      criteria &&
+      eligible &&
+      (!(policy.require_agent_completion ?? true) ||
+        terminal === "agent_completed"),
     eligible_for_quality_aggregate: eligible,
   };
 }
@@ -414,6 +437,12 @@ export interface RunOptions {
   adapter: ControlledHarnessAdapter;
   evaluator: Evaluator;
   taskChecks: Array<Record<string, unknown>>;
+  scoringPolicy?: {
+    checks: Array<Record<string, unknown>>;
+    pass_threshold?: number;
+    require_agent_completion?: boolean;
+  };
+  actualExecution?: Record<string, unknown>;
   schemaDirectory?: string;
   timer?: Timer;
   runtimeRedactions?: string[];
@@ -430,11 +459,31 @@ export class DeterministicRunner {
       ? await SchemaValidator.create(o.schemaDirectory)
       : undefined;
     schema?.validate("run-request", request);
+    const commit = o.runnerGitCommit ?? process.env.RUNNER_GIT_COMMIT;
+    if (!commit || !/^[a-f0-9]{7,64}$/.test(commit))
+      throw new RunnerError(
+        "runner.missing-git-commit",
+        "runner git commit must be an exact hexadecimal commit",
+      );
+    if (
+      o.actualExecution &&
+      JSON.stringify(o.actualExecution) !== JSON.stringify(request.execution)
+    )
+      throw new RunnerError(
+        "environment.execution-topology-mismatch",
+        "actual execution topology differs from finalized request",
+        "environment",
+      );
     if (
       sha256(o.prompt) !==
         String((request.task as any).prompt_digest).replace("sha256:", "") ||
       sha256(o.prompt) !==
-        String((request.invocation as any).stdin_digest).replace("sha256:", "")
+        String((request.invocation as any).stdin_digest).replace(
+          "sha256:",
+          "",
+        ) ||
+      sha256(o.prompt) !==
+        String((request.workspace as any).prompt_digest).replace("sha256:", "")
     )
       throw new RunnerError(
         "environment.prompt-or-stdin-digest-mismatch",
@@ -442,6 +491,16 @@ export class DeterministicRunner {
         "environment",
       );
     const target = request.artifact_targets as Record<string, string>;
+    const safePart = (value: unknown) =>
+      typeof value === "string" &&
+      value !== "." &&
+      value !== ".." &&
+      !/[\\/\0]/.test(value);
+    if (!safePart(request.campaign_id) || !safePart(request.run_id))
+      throw new RunnerError(
+        "runner.unsafe-attempt-path",
+        "campaign and run IDs must be single safe path components",
+      );
     const root = join(
       o.root,
       "results",
@@ -451,6 +510,16 @@ export class DeterministicRunner {
       String(request.run_id),
     );
     const workspace = join(root, "workspace");
+    const within = (path: string) =>
+      path === root || path.startsWith(`${root}/`);
+    for (const value of Object.values(target)) {
+      const path = join(root, value);
+      if (!within(path))
+        throw new RunnerError(
+          "runner.unsafe-artifact-path",
+          "artifact target escapes attempt directory",
+        );
+    }
     const state = new AttemptState();
     await mkdir(root, { recursive: true });
     await atomicWrite(
@@ -536,6 +605,13 @@ export class DeterministicRunner {
       );
       terminal = harness.terminal;
       state.transition("captured");
+      if (terminal !== "agent_completed")
+        error(
+          "agent",
+          new Error(`terminal ${terminal}`),
+          TERMINAL_ATTRIBUTION[terminal],
+          `terminal.${terminal}`,
+        );
     } catch (e) {
       const r =
         e instanceof RunnerError
@@ -544,10 +620,20 @@ export class DeterministicRunner {
               "runner.unhandled",
               e instanceof Error ? e.message : String(e),
             );
+      const failedDuringAgent = state.state === "running";
       terminal =
-        r.attribution === "environment" ? "environment_error" : "runner_error";
+        r.attribution === "environment"
+          ? "environment_error"
+          : r.attribution === "agent"
+            ? "agent_failed"
+            : "runner_error";
       if (state.state !== "failed") state.fail();
-      error("materialization", r, r.attribution, r.code);
+      error(
+        failedDuringAgent ? "agent" : "materialization",
+        r,
+        r.attribution,
+        r.code,
+      );
     }
     const write = async (name: keyof typeof target, text: string) =>
       atomicWrite(join(root, target[name]!), redact(text, secrets));
@@ -585,10 +671,10 @@ export class DeterministicRunner {
         );
         evaluation = evaluationSummary(
           raw,
-          o.taskChecks,
+          o.scoringPolicy ?? { checks: o.taskChecks },
           terminal,
           request.attempt as Record<string, unknown>,
-          `sha256:${sha256(evaluatorBytes)}`,
+          manifestDigest(raw),
         );
         if (evaluation.status === "error")
           error(
@@ -641,8 +727,19 @@ export class DeterministicRunner {
       ["evaluator_result", "evaluator-result", "application/json"],
     ];
     const artifacts = await Promise.all(
-      artifactKinds
-        .filter(([key]) => target[key] !== undefined)
+      (
+        await Promise.all(
+          artifactKinds.map(async (entry) =>
+            target[entry[0]] && (await exists(join(root, target[entry[0]]!)))
+              ? entry
+              : undefined,
+          ),
+        )
+      )
+        .filter(
+          (entry): entry is [keyof typeof target, string, string] =>
+            entry !== undefined,
+        )
         .map(async ([key, kind, media_type]) => {
           const file = join(root, target[key]!);
           const body = await readFile(file);
@@ -691,8 +788,7 @@ export class DeterministicRunner {
       },
       provenance: {
         runner_version: "0.2.0",
-        runner_git_commit:
-          o.runnerGitCommit ?? process.env.RUNNER_GIT_COMMIT ?? "deadbeef",
+        runner_git_commit: commit,
         runner_runtime: { name: "node", version: process.version.slice(1) },
         request_digest: manifestDigest(request),
         host: {

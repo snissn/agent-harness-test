@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import {
   AttemptState,
@@ -13,7 +14,8 @@ import {
 } from "../src/runner.js";
 import { sha256, treeDigest } from "../src/digests.js";
 
-const root = new URL("..", import.meta.url).pathname;
+const root = fileURLToPath(new URL("..", import.meta.url));
+process.env.RUNNER_GIT_COMMIT = "cf40646";
 async function fixture(
   scenario: ConstructorParameters<typeof FakeHarnessAdapter>[0] = "success",
 ) {
@@ -288,6 +290,83 @@ test("request is retained unchanged and evaluator mutation cannot alter retained
       ),
       "input\n",
     );
+  } finally {
+    await rm(f.dir, { recursive: true, force: true });
+  }
+});
+
+test("runner rejects unsafe identifiers, escaped targets, and false execution topology before launch", async () => {
+  for (const mutate of [
+    (request: any) => (request.run_id = "../escape"),
+    (request: any) => (request.campaign_id = "a/b"),
+    (request: any) => (request.artifact_targets.stdout = "../stdout.log"),
+  ]) {
+    const f = await fixture();
+    mutate(f.request);
+    try {
+      await assert.rejects(
+        new DeterministicRunner().run(f.request, {
+          root: f.dir,
+          stateSource: f.state,
+          prompt: "p",
+          adapter: f.adapter,
+          evaluator: f.evaluator,
+          taskChecks: [{ id: "core", weight: 1, required: true }],
+        }),
+        RunnerError,
+      );
+    } finally {
+      await rm(f.dir, { recursive: true, force: true });
+    }
+  }
+  const f = await fixture();
+  try {
+    await assert.rejects(
+      new DeterministicRunner().run(f.request, {
+        root: f.dir,
+        stateSource: f.state,
+        prompt: "p",
+        adapter: f.adapter,
+        evaluator: f.evaluator,
+        taskChecks: [{ id: "core", weight: 1, required: true }],
+        actualExecution: { mode: "host" },
+      }),
+      /topology/,
+    );
+  } finally {
+    await rm(f.dir, { recursive: true, force: true });
+  }
+});
+
+test("scoring policy applies threshold and optional completion requirement", async () => {
+  const f = await fixture("token-limit");
+  try {
+    const result = await new DeterministicRunner().run(f.request, {
+      root: f.dir,
+      stateSource: f.state,
+      prompt: "p",
+      adapter: f.adapter,
+      evaluator: {
+        evaluate: async () => ({
+          schema_version: "0.2.0",
+          task_id: f.request.task.id,
+          task_version: f.request.task.version,
+          status: "ok",
+          started_at: "2026-01-01T00:00:00Z",
+          finished_at: "2026-01-01T00:00:00Z",
+          duration_ms: 0,
+          checks: [{ id: "core", score: 0.5, passed: true }],
+        }),
+      },
+      taskChecks: [],
+      scoringPolicy: {
+        checks: [{ id: "core", weight: 1, required: true }],
+        pass_threshold: 0.5,
+        require_agent_completion: false,
+      },
+    });
+    assert.equal(result.evaluation.criteria_passed, true);
+    assert.equal(result.evaluation.end_to_end_passed, true);
   } finally {
     await rm(f.dir, { recursive: true, force: true });
   }
