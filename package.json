@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test test/**/*.test.ts",
     "validate": "tsx src/cli.ts validate",
-    "validate:file": "tsx src/cli.ts file"
+    "validate:file": "tsx src/cli.ts file",
+    "runner:fake": "tsx src/runner-cli.ts"
   },
   "dependencies": {
     "ajv": "8.20.0",

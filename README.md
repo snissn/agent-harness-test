@@ -16,9 +16,8 @@ added without changing task definitions.
 
 ## Current status
 
-This repository currently contains the `0.2.0-draft` framework contract,
-schemas, illustrative manifests, and a deterministic validation/CI gate. It
-does not yet contain an executable runner or released benchmark tasks.
+This repository contains the `0.2.0-draft` framework contract, schemas,
+deterministic validation/CI gate, and a provider-free deterministic runner.
 
 ## Start here
 
@@ -26,6 +25,43 @@ does not yet contain an executable runner or released benchmark tasks.
 - [spec/schemas](spec/schemas) contains JSON Schemas for manifests and results.
 - [spec/examples](spec/examples) contains non-runnable structural examples.
 - [docs/validation.md](docs/validation.md) documents the deterministic local and CI validation gate.
+- `npm run runner:fake -- request.json state/ output/ success` exercises the
+  typed request → materialize → fake harness → evaluator → immutable `run.json`
+  path without a live provider. Output directories must be fresh: finalized
+  artifacts are never overwritten.
+- `npm run runner:fake -- inspect <run-directory>` safely reports whether an
+  interrupted attempt has a finalized result (exit `0`) or remains incomplete
+  (exit `2`); it never repairs or overwrites evidence.
+- `npm run runner:fake -- recover <parent-request.json> <parent-run.json>
+<state-dir> <output-root> <retry|resume> <new-run-id> <reason> [scenario]` is an explicit,
+  operator-initiated diagnostic attempt. It creates a distinct run ID with
+  parent lineage and attempt number two; the runner never retries or resumes
+  automatically. The request must already contain the correct state, prompt,
+  and stdin digests—the CLI does not rewrite finalized request facts.
+
+## Runner contracts
+
+Adapters receive an immutable resolved request, workspace, exact prompt bytes,
+and abort signal. The runner owns the hard wall timer: on expiry it aborts and
+calls the adapter's `terminate("wall_time_exhausted")` hook, then preserves the
+partial workspace and ignores any late adapter result. Adapters must make that
+hook kill their process/process group when abort is insufficient.
+
+The evaluator receives a protected copy of the final workspace. Its raw output
+must validate against `evaluation.schema.json` and match the task check IDs
+exactly; evaluator mutation cannot alter retained evidence. Artifact target
+paths come from the request, tree manifests are deterministic, and the patch
+records the initial-to-final manifest delta. `secret_names` records variable
+names only. Runtime secret values are passed separately as non-persisted
+redaction controls and are scanned/redacted before every durable artifact is
+published.
+
+The fake-fixture characterization is observational, not a product-performance
+claim: the lifecycle test records monotonic per-phase timings in `run.json`,
+plus initial/final workspace byte counts. On this local checkout the complete
+schema-valid success fixture test took about 121 ms; this includes Node startup,
+schema loading, filesystem work, and test harness overhead, so it is useful only
+for detecting accidental pathological runner overhead on the same fixture.
 
 ## Core principles
 
