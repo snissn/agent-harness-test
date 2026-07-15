@@ -9,6 +9,12 @@ type ObjectValue = Record<string, unknown>;
 type Manifest = { file: string; kind: string; value: ObjectValue };
 const nonDraft = new Set(["candidate", "released", "retired"]);
 const scorableFailureReasons = new Set(["wall_time_exhausted", "token_limit_exhausted", "tool_limit_exhausted"]);
+const terminalAttributionByReason: Record<string, string> = {
+  agent_completed: "agent", agent_failed: "agent",
+  wall_time_exhausted: "runner", token_limit_exhausted: "runner", tool_limit_exhausted: "runner",
+  provider_error: "provider", harness_error: "harness", environment_error: "environment", runner_error: "runner",
+  cancelled: "operator"
+};
 const artifactTargetKeys: Record<string, string> = { request: "request", "run-result": "run_result", "native-events": "native_events", "normalized-events": "normalized_events", stdout: "stdout", stderr: "stderr", "final-message": "final_message", "workspace-patch": "workspace_patch", "workspace-tree": "workspace_tree", "evaluator-result": "evaluator_result" };
 
 export function safeRelativePath(value: string): boolean {
@@ -174,6 +180,8 @@ export async function validateRepository(rootInput: string): Promise<void> {
     const campaignId = asString(campaign.value.campaign_id), campaignExperiment = asObject(campaign.value.experiment), campaignSuite = asObject(campaign.value.suite);
     const referencedRuns: Manifest[] = [];
     const referencedRunIds = new Set<string>(), referencedRunPaths = new Set<string>();
+    const initialScheduleIndexes = new Set<number>(), initialPlanCoordinates = new Set<string>();
+    let initialRunCount = 0;
     let referencesValid = true;
     for (const item of campaign.value.runs as unknown[]) {
       const reference = asObject(item), runId = asString(reference.run_id), path = asString(reference.path);
@@ -198,6 +206,17 @@ export async function validateRepository(rootInput: string): Promise<void> {
         && asString(targetSuite.version) === asString(campaignSuite.version);
       if (!linked) { diagnostics.push({ file: campaign.file, code: "semantic/campaign-run-identity", message: `run result identity does not match campaign reference ${runId}` }); referencesValid = false; }
       if (asString(reference.digest) !== manifestDigest(target.value)) { diagnostics.push({ file: campaign.file, code: "semantic/campaign-run-digest", message: `run result digest mismatch for ${runId}` }); referencesValid = false; }
+      const attempt = asObject(target.value.attempt);
+      if (attempt.mode === "initial") {
+        initialRunCount += 1;
+        const scheduleIndex = target.value.schedule_index as number;
+        const task = asObject(target.value.task);
+        const planCoordinate = `${asString(task.id)}@${asString(task.version)}/${asString(target.value.configuration_id)}/${target.value.repetition as number}`;
+        if (initialScheduleIndexes.has(scheduleIndex)) { diagnostics.push({ file: campaign.file, code: "semantic/campaign-schedule-index", message: `duplicate initial schedule_index ${scheduleIndex}` }); referencesValid = false; }
+        else initialScheduleIndexes.add(scheduleIndex);
+        if (initialPlanCoordinates.has(planCoordinate)) { diagnostics.push({ file: campaign.file, code: "semantic/campaign-plan-coordinate", message: `duplicate initial plan coordinate ${planCoordinate}` }); referencesValid = false; }
+        else initialPlanCoordinates.add(planCoordinate);
+      }
       const campaignRunner = asObject(campaign.value.runner), provenance = asObject(target.value.provenance);
       const campaignRuntime = asObject(campaignRunner.runtime), runRuntime = asObject(provenance.runner_runtime);
       const runnerMatches = asString(campaignRunner.version) === asString(provenance.runner_version)
@@ -207,6 +226,7 @@ export async function validateRepository(rootInput: string): Promise<void> {
       if (!runnerMatches) { diagnostics.push({ file: campaign.file, code: "semantic/campaign-runner", message: `run result runner provenance does not match campaign runner for ${runId}` }); referencesValid = false; }
       referencedRuns.push(target);
     }
+    if (referencesValid && campaign.value.status === "completed" && initialRunCount !== campaign.value.planned_run_count) diagnostics.push({ file: campaign.file, code: "semantic/campaign-coverage", message: `completed campaign requires ${campaign.value.planned_run_count as number} initial runs, found ${initialRunCount}` });
     if (referencesValid) {
       const summary = asObject(campaign.value.summary);
       const qualityEligibleRuns = referencedRuns.filter((run) => derivedQualityEligibility(run.value));
@@ -492,7 +512,8 @@ export async function validateRepository(rootInput: string): Promise<void> {
     const summary = asObject(run.value.evaluation), summaryStatus = asString(summary.status);
     const terminal = asObject(run.value.terminal), terminalReason = asString(terminal.reason), terminalAttribution = asString(terminal.attribution);
     const attempt = asObject(run.value.attempt);
-    if ((terminalReason === "agent_completed" || terminalReason === "agent_failed") && terminalAttribution !== "agent") diagnostics.push({ file: run.file, code: "semantic/run-terminal-attribution", message: `${terminalReason} terminal reason requires agent attribution, got ${terminalAttribution}` });
+    const expectedAttribution = terminalAttributionByReason[terminalReason];
+    if (terminalAttribution !== expectedAttribution) diagnostics.push({ file: run.file, code: "semantic/run-terminal-attribution", message: `${terminalReason} terminal reason requires ${expectedAttribution} attribution, got ${terminalAttribution}` });
     const qualityEligible = derivedQualityEligibility(run.value);
     if (summary.eligible_for_quality_aggregate !== qualityEligible) diagnostics.push({ file: run.file, code: "semantic/run-quality-eligibility", message: `eligible_for_quality_aggregate must be ${qualityEligible} for ${asString(attempt.mode)} attempt, evaluation status ${summaryStatus}, and terminal reason ${terminalReason}` });
     const evaluation = evaluationsByFile.get(resolve(dirname(run.file), "evaluator.json"));

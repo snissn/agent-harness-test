@@ -234,6 +234,22 @@ async function campaignRunFixture(taskNetwork?: Record<string, unknown>, expecte
   return { root: fixture.root, experiment, experimentFile, campaign, campaignFile, request, requestFile, result, resultFile };
 }
 
+async function appendCampaignRun(
+  fixture: Awaited<ReturnType<typeof campaignRunFixture>>,
+  options: { runId: string; configurationIndex: number; scheduleIndex: number; attempt?: Record<string, unknown> }
+): Promise<void> {
+  const request = structuredClone(fixture.request), result = structuredClone(fixture.result);
+  request.run_id = options.runId; result.run_id = options.runId;
+  request.schedule_index = options.scheduleIndex; result.schedule_index = options.scheduleIndex;
+  if (options.attempt) { request.attempt = structuredClone(options.attempt); result.attempt = structuredClone(options.attempt); }
+  setRunConfiguration(request, result, { configurations: [fixture.experiment.configurations[options.configurationIndex]] });
+  result.provenance.request_digest = manifestDigest(request);
+  const runDirectory = join(fixture.root, "results", result.experiment.id, result.campaign_id, "runs", result.run_id); await mkdir(runDirectory, { recursive: true });
+  await writeFile(join(runDirectory, "request.json"), JSON.stringify(request)); await writeFile(join(runDirectory, "run.json"), JSON.stringify(result));
+  fixture.campaign.runs.push({ run_id: result.run_id, path: `runs/${result.run_id}/run.json`, digest: manifestDigest(result) });
+  fixture.campaign.summary.recorded_runs += 1; fixture.campaign.summary.operational_successes += 1; fixture.campaign.summary.invalid_runs += 1;
+}
+
 async function runEvaluationFixture(requireAgentCompletion = true): Promise<{ root: string; request: Record<string, any>; requestFile: string; result: Record<string, any>; resultFile: string; evaluation: Record<string, any>; evaluationFile: string }> {
   const fixture = await semanticFixture(); const task = fixture.task as Record<string, any>;
   if (!requireAgentCompletion) { task.scoring.require_agent_completion = false; await writeFile(fixture.taskFile, JSON.stringify(task)); }
@@ -787,6 +803,33 @@ test("campaigns reject duplicate run references", async () => {
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/duplicate-run-reference"));
 });
 
+test("completed campaigns cover every initial plan cell while diagnostic attempts remain additional", async () => {
+  const fixture = await campaignRunFixture();
+  await appendCampaignRun(fixture, { runId: "01J00000000000000000000001", configurationIndex: 0, scheduleIndex: 0, attempt: { number: 2, mode: "retry", initiated_by: "operator", parent_run_id: fixture.result.run_id, reason: "diagnostic retry" } });
+  fixture.campaign.status = "completed"; await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError
+    && error.diagnostics.some((item) => item.code === "semantic/campaign-coverage"));
+
+  await appendCampaignRun(fixture, { runId: "01J00000000000000000000002", configurationIndex: 1, scheduleIndex: 1 });
+  await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign)); await validateRepository(fixture.root);
+
+  await appendCampaignRun(fixture, { runId: "01J00000000000000000000003", configurationIndex: 0, scheduleIndex: 0, attempt: { number: 2, mode: "resume", initiated_by: "operator", parent_run_id: fixture.result.run_id, reason: "diagnostic resume" } });
+  await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign)); await validateRepository(fixture.root);
+});
+
+test("initial campaign runs have unique plan coordinates and schedule indices", async () => {
+  for (const { configurationIndex, scheduleIndex, code } of [
+    { configurationIndex: 0, scheduleIndex: 1, code: "semantic/campaign-plan-coordinate" },
+    { configurationIndex: 1, scheduleIndex: 0, code: "semantic/campaign-schedule-index" }
+  ]) {
+    const fixture = await campaignRunFixture();
+    await appendCampaignRun(fixture, { runId: "01J00000000000000000000001", configurationIndex, scheduleIndex });
+    await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign));
+    await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError
+      && error.diagnostics.some((item) => item.code === code));
+  }
+});
+
 test("campaign run references require their run-result target", async () => {
   const fixture = await campaignRunFixture(); await unlink(fixture.resultFile);
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/campaign-run-reference"));
@@ -891,6 +934,30 @@ test("agent completion requires agent attribution", async () => {
     await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError
       && error.diagnostics.some((item) => item.code === "semantic/run-terminal-attribution")
       && error.diagnostics.some((item) => item.code === "semantic/run-quality-eligibility" && item.message.includes("must be false")));
+  }
+});
+
+test("terminal reasons require their canonical subsystem attribution", async () => {
+  const cases = [
+    { reason: "agent_completed", attribution: "agent", invalid: "runner", qualityEligible: true, operationalSuccess: true },
+    { reason: "agent_failed", attribution: "agent", invalid: "provider", qualityEligible: true, operationalSuccess: false },
+    { reason: "wall_time_exhausted", attribution: "runner", invalid: "agent", qualityEligible: true, operationalSuccess: false },
+    { reason: "token_limit_exhausted", attribution: "runner", invalid: "harness", qualityEligible: true, operationalSuccess: false },
+    { reason: "tool_limit_exhausted", attribution: "runner", invalid: "operator", qualityEligible: true, operationalSuccess: false },
+    { reason: "provider_error", attribution: "provider", invalid: "agent", qualityEligible: false, operationalSuccess: false },
+    { reason: "harness_error", attribution: "harness", invalid: "runner", qualityEligible: false, operationalSuccess: false },
+    { reason: "environment_error", attribution: "environment", invalid: "provider", qualityEligible: false, operationalSuccess: false },
+    { reason: "runner_error", attribution: "runner", invalid: "environment", qualityEligible: false, operationalSuccess: false },
+    { reason: "cancelled", attribution: "operator", invalid: "runner", qualityEligible: false, operationalSuccess: false }
+  ];
+  for (const item of cases) {
+    const valid = await runEvaluationFixture(); valid.result.terminal = { reason: item.reason, attribution: item.attribution, operational_success: item.operationalSuccess }; valid.result.evaluation.eligible_for_quality_aggregate = item.qualityEligible;
+    await writeFile(valid.resultFile, JSON.stringify(valid.result)); await validateRepository(valid.root);
+
+    const invalid = await runEvaluationFixture(); invalid.result.terminal = { reason: item.reason, attribution: item.invalid, operational_success: item.operationalSuccess }; invalid.result.evaluation.eligible_for_quality_aggregate = item.reason.endsWith("_exhausted");
+    await writeFile(invalid.resultFile, JSON.stringify(invalid.result));
+    await assert.rejects(validateRepository(invalid.root), (error: unknown) => error instanceof ValidationError
+      && error.diagnostics.some((diagnostic) => diagnostic.code === "semantic/run-terminal-attribution" && diagnostic.message.includes(item.attribution)));
   }
 });
 
