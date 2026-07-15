@@ -175,13 +175,15 @@ async function addAlternateSuite(fixture: { root: string; request: Record<string
   await mkdir(join(fixture.root, "suites/alternate"), { recursive: true }); await writeFile(join(fixture.root, "suites/alternate/1.0.0.json"), JSON.stringify(suite)); return suite;
 }
 
-async function campaignRunFixture(): Promise<{ root: string; experiment: Record<string, any>; experimentFile: string; campaign: Record<string, any>; campaignFile: string; request: Record<string, any>; requestFile: string; result: Record<string, any>; resultFile: string }> {
-  const fixture = await semanticFixture(); const task = fixture.task as Record<string, any>; const { experiment, file: experimentFile } = await addValidExperiment(fixture);
+async function campaignRunFixture(taskNetwork?: Record<string, unknown>): Promise<{ root: string; experiment: Record<string, any>; experimentFile: string; campaign: Record<string, any>; campaignFile: string; request: Record<string, any>; requestFile: string; result: Record<string, any>; resultFile: string }> {
+  const fixture = await semanticFixture(); const task = fixture.task as Record<string, any>;
+  if (taskNetwork) { task.environment.network = structuredClone(taskNetwork); await writeFile(fixture.taskFile, JSON.stringify(task)); }
+  const { experiment, file: experimentFile } = await addValidExperiment(fixture);
   const campaign = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/campaign.example.json"), "utf8"));
   const request = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/run-request.example.json"), "utf8"));
   const result = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/run-result.example.json"), "utf8"));
   const experimentReference = { id: experiment.id, version: experiment.version, spec_path: `experiments/${experiment.id}/${experiment.version}.json`, spec_digest: manifestDigest(experiment) };
-  campaign.experiment = experimentReference; campaign.suite = { ...experiment.suite }; setRunReferences(request, experiment, task); setRunReferences(result, experiment, task); setRunConfiguration(request, result, experiment);
+  campaign.experiment = experimentReference; campaign.suite = { ...experiment.suite }; setRunReferences(request, experiment, task); setRunReferences(result, experiment, task); setRunConfiguration(request, result, experiment); request.network = structuredClone(task.environment.network);
   request.workspace.prompt_path = task.prompt.path; request.workspace.prompt_digest = task.prompt.digest; request.workspace.initial_tree_digest = task.problem_state.expected_tree_digest;
   result.evaluation = { status: "not-run", reason: "campaign reference fixture", eligible_for_quality_aggregate: false };
   result.provenance.request_digest = manifestDigest(request);
@@ -512,6 +514,19 @@ test("run requests require their owning campaign preflight", async () => {
 test("run request workspace fingerprints resolve against its task spec", async () => {
   const fixture = await campaignRunFixture(); fixture.request.workspace.prompt_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"; fixture.result.provenance.request_digest = manifestDigest(fixture.request); await writeFile(fixture.requestFile, JSON.stringify(fixture.request)); await writeFile(fixture.resultFile, JSON.stringify(fixture.result));
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/workspace-fingerprint"));
+});
+
+test("run request network policy exactly preserves its task spec", async () => {
+  const cases = [
+    { task: { mode: "disabled" }, broadened: { mode: "enabled" } },
+    { task: { mode: "restricted", allow_domains: ["api.example.test"], allow_methods: ["GET"] }, broadened: { mode: "restricted", allow_domains: ["api.example.test", "other.example.test"], allow_methods: ["GET"] } }
+  ];
+  for (const network of cases) {
+    const fixture = await campaignRunFixture(network.task); await validateRepository(fixture.root);
+    fixture.request.network = network.broadened; fixture.result.provenance.request_digest = manifestDigest(fixture.request); fixture.campaign.runs[0].digest = manifestDigest(fixture.result);
+    await writeFile(fixture.requestFile, JSON.stringify(fixture.request)); await writeFile(fixture.resultFile, JSON.stringify(fixture.result)); await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign));
+    await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-network-policy"));
+  }
 });
 
 test("run results require their canonical request digest and comparable identity", async () => {

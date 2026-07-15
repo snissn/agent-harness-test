@@ -330,6 +330,10 @@ export async function validateRepository(rootInput: string): Promise<void> {
             && asString(workspace.initial_tree_digest) === asString(state.expected_tree_digest);
           if (!workspaceMatches) diagnostics.push({ file: manifest.file, code: "semantic/workspace-fingerprint", message: "run request workspace fingerprints do not match TaskSpec" });
         } catch (error) { diagnostics.push({ file: manifest.file, code: "semantic/workspace-fingerprint", message: error instanceof Error ? error.message : String(error) }); }
+        try {
+          const environment = asObject(task.value.environment);
+          if (manifestDigest(manifest.value.network) !== manifestDigest(environment.network)) diagnostics.push({ file: manifest.file, code: "semantic/run-network-policy", message: "run request network policy does not match TaskSpec" });
+        } catch (error) { diagnostics.push({ file: manifest.file, code: "semantic/run-network-policy", message: error instanceof Error ? error.message : String(error) }); }
       }
     }
     if (manifest.kind === "run-request") {

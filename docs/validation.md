@@ -34,8 +34,9 @@ Released suites reference released tasks and their RFC 8785
 manifest digests. Campaign, run-request, and run-result experiment/suite/task
 references must resolve the exact loaded manifest path and digest. Run task
 references also pin the TaskSpec prompt, initial-state, and evaluator digests;
-run-request workspace fingerprints must agree with the same TaskSpec. Campaign
-and run suites must equal their experiment's pinned suite; run tasks must belong
+run-request workspace fingerprints and network policy must exactly agree with the
+same TaskSpec. Campaign and run suites must equal their experiment's pinned suite;
+run tasks must belong
 to that suite and satisfy experiment selection. A run-request configuration must
 exactly equal one experiment-declared configuration. Every run
 result is joined to its co-located `request.json` by canonical digest and shared
