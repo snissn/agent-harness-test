@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { manifestDigest, sha256 } from "../src/digests.js";
-import { rebuildReport } from "../src/report.js";
+import { rebuildReport, weightedSuiteHeadline } from "../src/report.js";
 
 type Json = Record<string, any>;
 
@@ -244,6 +244,30 @@ async function addFullyIncompatibleHistory(root: string): Promise<void> {
   campaign.runs[0].digest = manifestDigest(run);
   await writeJson(join(directory, "campaign.json"), campaign);
 }
+
+test("suite headline averages repetitions per task before applying declared task weights", () => {
+  const score = weightedSuiteHeadline([
+    { task: "task-a@1.0.0", score: 0, weight: 1 },
+    { task: "task-a@1.0.0", score: 1, weight: 1 },
+    { task: "task-b@1.0.0", score: 1, weight: 3 },
+  ]);
+  assert.equal(score, 0.875);
+});
+
+test("campaign discovery ignores nested workspace campaign files", async () => {
+  const root = await fixture();
+  try {
+    const nested = join(root, campaignRelative, "runs", "unreferenced", "workspace");
+    await mkdir(nested, { recursive: true });
+    await writeJson(join(nested, "campaign.json"), { invalid: "SECRET_SENTINEL" });
+    const result = await rebuildReport(root);
+    const data = await readJson(result.data);
+    assert.equal(result.runs, 2);
+    assert.equal(result.invalid, 0);
+    assert.equal(data.ingestion_errors.length, 0);
+    assert.doesNotMatch(await readFile(result.data, "utf8"), /SECRET_SENTINEL/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 test("deterministic rebuild renders every required report section and smoke qualification", async () => {
   const root = await fixture();

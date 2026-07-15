@@ -75,6 +75,19 @@ function historyIdentity(campaign: Json, run: Json): { identity: Json; reasons: 
   };
 }
 
+export function weightedSuiteHeadline(observations: Array<{ task: string; score: number; weight: number }>): number | null {
+  const tasks = new Map<string, { scores: number[]; weight: number }>();
+  for (const observation of observations) {
+    const task = tasks.get(observation.task) ?? { scores: [], weight: observation.weight };
+    task.scores.push(observation.score);
+    tasks.set(observation.task, task);
+  }
+  const taskScores = [...tasks.values()].filter(task => task.scores.length > 0 && task.weight > 0);
+  const totalWeight = taskScores.reduce((total, task) => total + task.weight, 0);
+  if (totalWeight === 0) return null;
+  return taskScores.reduce((total, task) => total + task.weight * (task.scores.reduce((sum, score) => sum + score, 0) / task.scores.length), 0) / totalWeight;
+}
+
 export interface RebuildResult { database: string; data: string; html: string; invalid: number; runs: number; }
 
 /** Rebuilds a disposable projection. Source artifacts are never modified. */
@@ -104,7 +117,10 @@ CREATE TABLE ingestion_errors (source TEXT, code TEXT, message TEXT);
 CREATE TABLE lineage (campaign_key TEXT, run_id TEXT, parent_run_id TEXT, attempt_mode TEXT);`);
 
   const validator = await SchemaValidator.create(join(root, "spec/schemas"));
-  const campaignFiles = (await files(results)).filter(path => basename(path) === "campaign.json").sort((left, right) => portable(left).localeCompare(portable(right)));
+  const campaignFiles = (await files(results)).filter(path => {
+    const parts = portable(relative(results, path)).split("/");
+    return parts.length === 3 && parts[2] === "campaign.json";
+  }).sort((left, right) => portable(left).localeCompare(portable(right)));
   const taskMetadata = new Map<string, Json>();
   const experimentMetadata = new Map<string, Json>();
   const suiteMetadata = new Map<string, Json>();
@@ -229,6 +245,7 @@ CREATE TABLE lineage (campaign_key TEXT, run_id TEXT, parent_run_id TEXT, attemp
             configuration_id: run.configuration_id,
             configuration_key: `${experimentKey}:${run.configuration_id}`,
             task: key(run.task),
+            task_weight: suiteTask.weight,
             category: task.category ?? "unknown",
             languages: task.languages ?? [],
             effort: run.resolved_configuration.effort.native_value ?? "unknown",
@@ -272,7 +289,7 @@ CREATE TABLE lineage (campaign_key TEXT, run_id TEXT, parent_run_id TEXT, attemp
       configuration_id: representative.configuration_id,
       recorded_attempts: attempts.length,
       quality_denominator: quality.length,
-      headline_score: quality.length ? quality.reduce((total, row) => total + row.evaluation.artifact_quality_score, 0) / quality.length : null,
+      headline_score: weightedSuiteHeadline(quality.map(row => ({ task: row.task, score: row.evaluation.artifact_quality_score, weight: row.task_weight }))),
       end_to_end_pass_rate: quality.length ? quality.filter(row => row.evaluation.end_to_end_passed === true).length / quality.length : null,
       operational_completion_rate: attempts.length ? attempts.filter(row => row.terminal.operational_success === true).length / attempts.length : null,
       invalid_or_infrastructure_attempts: attempts.filter(row => row.evaluation.eligible_for_quality_aggregate !== true).length,
