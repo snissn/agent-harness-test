@@ -368,6 +368,17 @@ test("task artifact trees are digest inputs, not framework manifest discovery ro
   const fixture = await semanticFixture(); await validateRepository(fixture.root);
 });
 
+test("task discovery rejects undeclared manifest-like typos while preserving declared artifacts", async () => {
+  const fixture = await semanticFixture(); const taskDirectory = join(fixture.root, "tasks/demo/1.0.0");
+  (fixture.task.calibration as Record<string, unknown>).evidence_path = "tasks/demo/1.0.0/calibration.json"; await writeFile(fixture.taskFile, JSON.stringify(fixture.task));
+  await writeFile(join(taskDirectory, "calibration.json"), "{ calibration evidence }");
+  await writeFile(join(taskDirectory, "taks.yaml"), "not: [valid");
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError
+    && error.diagnostics.length === 1
+    && error.diagnostics[0]?.code === "semantic/unknown-manifest"
+    && error.diagnostics[0]?.file.endsWith("/tasks/demo/1.0.0/taks.yaml"));
+});
+
 test("draft task manifest path must match its declared ID and version", async () => {
   const fixture = await semanticFixture("foo"); fixture.task.id = "bar"; fixture.task.status = "draft"; await writeFile(fixture.taskFile, JSON.stringify(fixture.task));
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/task-identity") && !error.diagnostics.some((item) => item.code === "semantic/task-artifact"));
@@ -964,6 +975,27 @@ test("terminal reasons require their canonical subsystem attribution", async () 
     await writeFile(invalid.resultFile, JSON.stringify(invalid.result));
     await assert.rejects(validateRepository(invalid.root), (error: unknown) => error instanceof ValidationError
       && error.diagnostics.some((diagnostic) => diagnostic.code === "semantic/run-terminal-attribution" && diagnostic.message.includes(item.attribution)));
+  }
+});
+
+test("terminal reasons require canonical operational success", async () => {
+  const cases = [
+    { reason: "agent_completed", attribution: "agent", operationalSuccess: true, qualityEligible: true },
+    { reason: "agent_failed", attribution: "agent", operationalSuccess: false, qualityEligible: true },
+    { reason: "wall_time_exhausted", attribution: "runner", operationalSuccess: false, qualityEligible: true },
+    { reason: "token_limit_exhausted", attribution: "runner", operationalSuccess: false, qualityEligible: true },
+    { reason: "tool_limit_exhausted", attribution: "runner", operationalSuccess: false, qualityEligible: true },
+    { reason: "provider_error", attribution: "provider", operationalSuccess: false, qualityEligible: false },
+    { reason: "harness_error", attribution: "harness", operationalSuccess: false, qualityEligible: false },
+    { reason: "environment_error", attribution: "environment", operationalSuccess: false, qualityEligible: false },
+    { reason: "runner_error", attribution: "runner", operationalSuccess: false, qualityEligible: false },
+    { reason: "cancelled", attribution: "operator", operationalSuccess: false, qualityEligible: false }
+  ];
+  for (const item of cases) {
+    const fixture = await runEvaluationFixture(); fixture.result.terminal = { reason: item.reason, attribution: item.attribution, operational_success: !item.operationalSuccess }; fixture.result.evaluation.eligible_for_quality_aggregate = item.qualityEligible;
+    await writeFile(fixture.resultFile, JSON.stringify(fixture.result));
+    await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError
+      && error.diagnostics.some((diagnostic) => diagnostic.code === "semantic/run-terminal-operational-success" && diagnostic.message.includes(String(item.operationalSuccess))));
   }
 });
 

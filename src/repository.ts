@@ -84,7 +84,7 @@ async function taskManifests(tasksDirectory: string): Promise<string[]> {
     for (const version of await readdir(taskDirectory, { withFileTypes: true })) {
       if (!version.isDirectory() || version.isSymbolicLink()) continue;
       const versionDirectory = join(taskDirectory, version.name);
-      for (const name of ["task.json", "task.yaml", "task.yml"]) if (await exists(join(versionDirectory, name))) manifests.push(join(versionDirectory, name));
+      await walk(dirname(tasksDirectory), versionDirectory, manifests);
     }
   }
   return manifests;
@@ -103,13 +103,16 @@ async function canonicalArtifactDirectories(tasksDirectory: string): Promise<str
 }
 
 function insideExamples(root: string, file: string): boolean { return relative(root, file).split(sep).join("/").startsWith("spec/examples/"); }
+function canonicalTaskArtifactPath(parts: string[]): boolean {
+  return parts.length > 4 && parts[0] === "tasks" && Boolean(parts[1] && parts[2]) && (parts[3] === "state" || parts[3] === "evaluator");
+}
 function reservedRunJsonArtifactPath(parts: string[]): boolean {
   return parts.length === 6 && parts[0] === "results" && Boolean(parts[1] && parts[2] && parts[4]) && parts[3] === "runs" && reservedRunJsonArtifacts.has(parts[5]!);
 }
 function manifestOwnedPath(file: string): boolean {
   const parts = file.replace(/^\.\//, "").split(/[\\/]/);
   const reportProjection = parts[0] === "results" && parts[3] === "reports";
-  return parts[0] === "tasks" || parts[0] === "suites" || parts[0] === "experiments" || (parts[0] === "results" && !reportProjection && !reservedRunJsonArtifactPath(parts));
+  return (parts[0] === "tasks" && !canonicalTaskArtifactPath(parts)) || parts[0] === "suites" || parts[0] === "experiments" || (parts[0] === "results" && !reportProjection && !reservedRunJsonArtifactPath(parts));
 }
 function campaignIdentity(value: ObjectValue): string { return `${asString(asObject(value.experiment).id)}/${asString(value.campaign_id)}`; }
 function identity(manifest: Manifest): string | undefined {
@@ -132,11 +135,30 @@ function declaredManifestPaths(manifest: Manifest): string[] | undefined {
   return undefined;
 }
 
+function declaredTaskArtifacts(manifests: Manifest[]): { files: Set<string>; directories: Set<string> } {
+  const files = new Set<string>(), directories = new Set<string>();
+  for (const manifest of manifests.filter((item) => item.kind === "task")) {
+    const prompt = asObject(manifest.value.prompt), source = asObject(asObject(manifest.value.problem_state).source), evaluator = asObject(manifest.value.evaluator);
+    files.add(asString(prompt.path));
+    if (source.kind === "directory") directories.add(asString(source.path));
+    else if (source.kind === "archive" && typeof source.path === "string") files.add(source.path);
+    else if (source.kind === "git") for (const patch of (source.patches as unknown[] | undefined) ?? []) files.add(asString(asObject(patch).path));
+    directories.add(asString(evaluator.path));
+    if (manifest.value.calibration) files.add(asString(asObject(manifest.value.calibration).evidence_path));
+  }
+  return { files, directories };
+}
+
+function taskArtifactOwns(path: string, artifacts: { files: Set<string>; directories: Set<string> }): boolean {
+  return artifacts.files.has(path) || [...artifacts.directories].some((directory) => path === directory || path.startsWith(`${directory}/`));
+}
+
 export async function validateRepository(rootInput: string): Promise<void> {
   const root = await realpath(rootInput);
   const schemas = await SchemaValidator.create(join(root, "spec/schemas"));
   const diagnostics: Diagnostic[] = [];
   const manifests: Manifest[] = [];
+  const unknownManifestCandidates: Array<{ file: string; repositoryPath: string }> = [];
   const exampleDirectory = join(root, "spec/examples");
   const exampleFiles = await discoveryDirectory(exampleDirectory, diagnostics)
     ? (await readdir(exampleDirectory, { withFileTypes: true })).filter((entry) => entry.isFile() && isManifestPath(entry.name)).map((entry) => join(exampleDirectory, entry.name))
@@ -151,7 +173,7 @@ export async function validateRepository(rootInput: string): Promise<void> {
   for (const file of [...exampleFiles, ...repoFiles].sort()) {
     const repositoryPath = relative(root, file).split(sep).join("/");
     const kind = kindFromRepositoryPath(repositoryPath);
-    if (!kind) { if (manifestOwnedPath(repositoryPath)) diagnostics.push({ file, code: "semantic/unknown-manifest", message: "cannot infer manifest schema kind from a manifest-owned path" }); continue; }
+    if (!kind) { unknownManifestCandidates.push({ file, repositoryPath }); continue; }
     if (!insideExamples(root, file)) {
       const fileType = await lstat(file);
       if (fileType.isSymbolicLink() || !fileType.isFile()) {
@@ -163,6 +185,11 @@ export async function validateRepository(rootInput: string): Promise<void> {
     catch (error) { diagnostics.push(...(error instanceof ValidationError ? error.diagnostics : [{ file, code: "internal", message: error instanceof Error ? error.message : String(error) }])); }
   }
   const repositoryManifests = manifests.filter((manifest) => !insideExamples(root, manifest.file));
+  const taskArtifacts = declaredTaskArtifacts(repositoryManifests);
+  for (const candidate of unknownManifestCandidates) {
+    const declaredTaskArtifact = candidate.repositoryPath.startsWith("tasks/") && taskArtifactOwns(candidate.repositoryPath, taskArtifacts);
+    if (manifestOwnedPath(candidate.repositoryPath) && !declaredTaskArtifact) diagnostics.push({ file: candidate.file, code: "semantic/unknown-manifest", message: "cannot infer manifest schema kind from a manifest-owned path" });
+  }
   for (const manifest of repositoryManifests) {
     const declaredPaths = declaredManifestPaths(manifest);
     const manifestPath = relative(root, manifest.file).split(sep).join("/");
@@ -518,6 +545,8 @@ export async function validateRepository(rootInput: string): Promise<void> {
     const attempt = asObject(run.value.attempt);
     const expectedAttribution = terminalAttributionByReason[terminalReason];
     if (terminalAttribution !== expectedAttribution) diagnostics.push({ file: run.file, code: "semantic/run-terminal-attribution", message: `${terminalReason} terminal reason requires ${expectedAttribution} attribution, got ${terminalAttribution}` });
+    const expectedOperationalSuccess = terminalReason === "agent_completed";
+    if (terminal.operational_success !== expectedOperationalSuccess) diagnostics.push({ file: run.file, code: "semantic/run-terminal-operational-success", message: `${terminalReason} terminal reason requires operational_success ${expectedOperationalSuccess}` });
     const qualityEligible = derivedQualityEligibility(run.value);
     if (summary.eligible_for_quality_aggregate !== qualityEligible) diagnostics.push({ file: run.file, code: "semantic/run-quality-eligibility", message: `eligible_for_quality_aggregate must be ${qualityEligible} for ${asString(attempt.mode)} attempt, evaluation status ${summaryStatus}, and terminal reason ${terminalReason}` });
     const evaluation = evaluationsByFile.get(resolve(dirname(run.file), "evaluator.json"));

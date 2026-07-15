@@ -37,7 +37,10 @@ Within repository roots, every path that infers a canonical task, suite,
 experiment, campaign, request, result, or evaluation source manifest must be a
 regular non-symlink file. Discovery reports canonical manifest symlinks without
 following their targets; irrelevant symlinks at noncanonical report paths remain
-ignored.
+ignored. Task-version discovery also rejects undeclared JSON/YAML files while
+excluding artifact files and directory trees explicitly claimed by a validated
+TaskSpec, so state/evaluator data and digest-verified task artifacts are not
+misclassified as framework manifests.
 
 Task authors should add a failing fixture/test first, update `SPEC.md` and its
 schema before using a new concept, then add the valid manifest/artifacts and
@@ -88,7 +91,9 @@ resumes may reuse their parent's plan coordinates without replacing or inflating
 initial coverage.
 `recorded_runs` counts referenced results, `operational_successes` counts true
 `terminal.operational_success` values, and the end-to-end counter uses its run
-evaluation boolean. Quality eligibility is derived from attempt lineage,
+evaluation boolean. Only `agent_completed` may set `operational_success` true;
+every failure, exhausted limit, infrastructure error, and cancellation must set
+it false. Quality eligibility is derived from attempt lineage,
 evaluation status, and the terminal failure taxonomy; `agent_failed` is scorable
 only with `agent` attribution. Both `agent_completed` and `agent_failed` reject
 contradictory non-agent attributions. Exhausted limits are attributed to the
