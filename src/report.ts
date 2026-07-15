@@ -1,5 +1,5 @@
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { mkdir, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { canonicalJson, manifestDigest, sha256 } from "./digests.js";
 import { isManifestPath, loadManifest } from "./load.js";
@@ -27,6 +27,20 @@ function safe(value: unknown): string { return String(value ?? "").replace(/[&<>
 function within(parent: string, child: string): boolean {
   const path = relative(parent, child);
   return path !== "" && path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+}
+async function physicalPath(path: string): Promise<string> {
+  let existing = path;
+  const suffix: string[] = [];
+  while (true) {
+    try { return resolve(await realpath(existing), ...suffix); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const parent = dirname(existing);
+      if (parent === existing) throw error;
+      suffix.unshift(basename(existing));
+      existing = parent;
+    }
+  }
 }
 function redactString(value: string, root: string): string {
   return value
@@ -153,7 +167,11 @@ export async function rebuildReport(rootInput: string, outputInput = "reports"):
   const output = resolve(root, outputInput);
   const results = join(root, "results");
   const protectedRoots = [results, join(root, "tasks"), join(root, "spec"), join(root, "experiments"), join(root, "suites")];
-  if (output === root || !within(root, output) || protectedRoots.some(source => output === source || within(source, output) || within(output, source))) {
+  const physicalRoot = await physicalPath(root);
+  const physicalOutput = await physicalPath(output);
+  const physicalProtectedRoots = await Promise.all(protectedRoots.map(physicalPath));
+  if (output === root || !within(root, output) || protectedRoots.some(source => output === source || within(source, output) || within(output, source))
+    || physicalOutput === physicalRoot || !within(physicalRoot, physicalOutput) || physicalProtectedRoots.some(source => physicalOutput === source || within(source, physicalOutput) || within(physicalOutput, source))) {
     throw new Error("report output must be a disposable directory outside authoritative source roots");
   }
 
@@ -230,7 +248,12 @@ CREATE TABLE lineage (campaign_key TEXT, run_id TEXT, parent_run_id TEXT, attemp
             const referencedRun = await json(referencedPath);
             validateSchema(validator, "run-result", referencedRun, referencedPath, "campaign-coverage");
             if (manifestDigest(referencedRun) !== reference.digest || referencedRun.run_id !== reference.run_id || referencedRun.campaign_id !== campaign.campaign_id) throw new SourceError("campaign-coverage", "completed campaign contains an invalid run reference");
-            if (referencedRun.attempt.mode === "initial") recordedCoordinates.add(`${referencedRun.task.id}@${referencedRun.task.version}/${referencedRun.configuration_id}/${referencedRun.repetition}`);
+            if (referencedRun.attempt.mode === "initial") {
+              const coordinate = `${referencedRun.task.id}@${referencedRun.task.version}/${referencedRun.configuration_id}/${referencedRun.repetition}`;
+              if (!expectedCoordinates.has(coordinate)) throw new SourceError("campaign-coverage", `completed campaign contains unexpected initial cell ${coordinate}`);
+              if (recordedCoordinates.has(coordinate)) throw new SourceError("campaign-coverage", `completed campaign contains duplicate initial cell ${coordinate}`);
+              recordedCoordinates.add(coordinate);
+            }
           }
           if (recordedCoordinates.size !== expectedCoordinates.size || [...expectedCoordinates].some(coordinate => !recordedCoordinates.has(coordinate))) throw new SourceError("campaign-coverage", `completed campaign must cover all ${expectedCoordinates.size} planned initial cells`);
         }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
@@ -150,6 +150,34 @@ async function addRetry(root: string): Promise<string> {
   campaign.summary.invalid_runs += 1;
   await writeJson(campaignPath(root), campaign);
   return retryId;
+}
+
+async function addDuplicateInitialCell(root: string): Promise<void> {
+  const parentId = "codex-codex-medium-r1";
+  const duplicateId = "codex-codex-medium-duplicate-r1";
+  const parentDirectory = join(root, campaignRelative, "runs", parentId);
+  const duplicateDirectory = join(root, campaignRelative, "runs", duplicateId);
+  await cp(parentDirectory, duplicateDirectory, { recursive: true });
+  const requestPath = join(duplicateDirectory, "request.json");
+  const request = JSON.parse((await readFile(requestPath, "utf8")).replaceAll(parentId, duplicateId)) as Json;
+  request.run_id = duplicateId;
+  await writeJson(requestPath, request);
+  const requestContent = await readFile(requestPath);
+  const run = JSON.parse(JSON.stringify(await readJson(join(parentDirectory, "run.json"))).replaceAll(parentId, duplicateId)) as Json;
+  run.run_id = duplicateId;
+  const requestArtifact = run.artifacts.find((artifact: Json) => artifact.kind === "request");
+  requestArtifact.digest = `sha256:${sha256(requestContent)}`;
+  requestArtifact.bytes = requestContent.byteLength;
+  run.provenance.request_digest = manifestDigest(request);
+  await writeJson(join(duplicateDirectory, "run.json"), run);
+  const campaign = await readJson(campaignPath(root));
+  campaign.status = "completed";
+  campaign.runs.push({ run_id: duplicateId, path: `runs/${duplicateId}/run.json`, digest: manifestDigest(run) });
+  campaign.summary.recorded_runs += 1;
+  campaign.summary.operational_successes += 1;
+  campaign.summary.quality_eligible_runs += 1;
+  campaign.summary.end_to_end_passes += 1;
+  await writeJson(campaignPath(root), campaign);
 }
 
 async function addDuplicateCampaignIdInAnotherExperiment(root: string): Promise<void> {
@@ -555,6 +583,19 @@ test("completed campaigns must cover every planned initial matrix cell", async (
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("completed campaigns reject duplicate initial matrix cells", async () => {
+  const root = await fixture();
+  try {
+    await addDuplicateInitialCell(root);
+    const result = await rebuildReport(root);
+    const data = await readJson(result.data);
+    assert.equal(result.runs, 0);
+    assert.equal(result.invalid, 1);
+    assert.equal(data.ingestion_errors[0].code, "campaign-coverage");
+    assert.match(data.ingestion_errors[0].message, /duplicate initial cell/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("late projection conflicts roll back the entire quarantined run", async () => {
   const root = await fixture();
   try {
@@ -594,5 +635,8 @@ test("report refuses output paths that overlap authoritative sources", async () 
     await assert.rejects(rebuildReport(root, "results"), /disposable directory/);
     await assert.rejects(rebuildReport(root, "tasks/out"), /authoritative source roots/);
     await assert.rejects(rebuildReport(root, "suites/out"), /authoritative source roots/);
+    await symlink("results", join(root, "out"), "dir");
+    await assert.rejects(rebuildReport(root, "out/smoke"), /authoritative source roots/);
+    assert.equal((await readJson(campaignPath(root))).campaign_id, campaignId);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
