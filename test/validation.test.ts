@@ -547,6 +547,20 @@ test("run invocation runtime fingerprints match campaign preflight", async () =>
   }
 });
 
+test("run configuration runtime versions bind experiment, invocation, and campaign preflight", async () => {
+  const fixture = await campaignRunFixture();
+  await validateRepository(fixture.root);
+  fixture.request.invocation.resolved_runtime_version = "9.9.9";
+  fixture.campaign.preflight.harness_runtimes[0].resolved_runtime_version = "9.9.9";
+  fixture.result.provenance.request_digest = manifestDigest(fixture.request);
+  fixture.campaign.runs[0].digest = manifestDigest(fixture.result);
+  await writeFile(fixture.requestFile, JSON.stringify(fixture.request));
+  await writeFile(fixture.resultFile, JSON.stringify(fixture.result));
+  await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError
+    && error.diagnostics.some((item) => item.code === "semantic/run-configuration-runtime"));
+});
+
 test("run requests only use preflight from campaigns with matching experiment and suite pins", async () => {
   const matching = await campaignRunFixture(); await validateRepository(matching.root);
   for (const field of ["experiment", "suite"]) {

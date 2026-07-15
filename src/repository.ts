@@ -365,6 +365,7 @@ export async function validateRepository(rootInput: string): Promise<void> {
         const declared = (experiment.value.configurations as unknown[]).find((item) => asObject(item).id === configuration.id);
         if (!declared || manifestDigest(declared) !== manifestDigest(configuration)) diagnostics.push({ file: manifest.file, code: "semantic/run-configuration-reference", message: `run configuration ${asString(configuration.id)} does not exactly match its experiment declaration` });
       }
+      if (asString(harness.runtime_version) !== asString(invocation.resolved_runtime_version)) diagnostics.push({ file: manifest.file, code: "semantic/run-configuration-runtime", message: "run configuration harness runtime_version must match invocation resolved_runtime_version" });
       if (asString(harness.family) === "codex") {
         const bypassesSandbox = (invocation.argv as unknown[]).some((argument) => argument === "--dangerously-bypass-approvals-and-sandbox");
         if (invocation.full_access !== bypassesSandbox) diagnostics.push({ file: manifest.file, code: "semantic/invocation-full-access", message: "Codex full_access must match the sandbox-bypass argv flag" });
@@ -380,6 +381,7 @@ export async function validateRepository(rootInput: string): Promise<void> {
             && resolution.runtime_source === invocation.runtime_source
             && resolution.requested_runtime === invocation.requested_runtime
             && resolution.resolved_runtime_version === invocation.resolved_runtime_version
+            && resolution.resolved_runtime_version === harness.runtime_version
             && resolution.runtime_digest === invocation.runtime_digest
             && resolution.executable_digest === invocation.executable_digest; });
           if (!matchesPreflight) diagnostics.push({ file: manifest.file, code: "semantic/campaign-preflight", message: `run invocation does not match campaign preflight for ${asString(harness.family)}` });
