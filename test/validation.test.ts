@@ -597,6 +597,22 @@ test("run configuration runtime versions bind experiment, invocation, and campai
     && error.diagnostics.some((item) => item.code === "semantic/run-configuration-runtime"));
 });
 
+test("campaign identity and preflight lookup are scoped by experiment ID", async () => {
+  const fixture = await campaignRunFixture();
+  const experiment = structuredClone(fixture.experiment); experiment.id = "other"; experiment.configurations[0].harness.runtime_version = "9.9.9";
+  const experimentFile = join(fixture.root, "experiments/other/1.0.0.json"); await mkdir(join(fixture.root, "experiments/other"), { recursive: true }); await writeFile(experimentFile, JSON.stringify(experiment));
+  const experimentReference = { id: experiment.id, version: experiment.version, spec_path: "experiments/other/1.0.0.json", spec_digest: manifestDigest(experiment) };
+  const campaign = structuredClone(fixture.campaign); campaign.experiment = experimentReference; campaign.runs = []; campaign.summary = { recorded_runs: 0, operational_successes: 0, quality_eligible_runs: 0, end_to_end_passes: 0, invalid_runs: 0 }; campaign.preflight.harness_runtimes[0].resolved_runtime_version = "9.9.9";
+  const request = structuredClone(fixture.request); request.run_id = "01J00000000000000000000002"; request.experiment = experimentReference; request.configuration = structuredClone(experiment.configurations[0]); request.invocation.resolved_runtime_version = "9.9.9";
+  const campaignDirectory = join(fixture.root, "results", experiment.id, campaign.campaign_id); const runDirectory = join(campaignDirectory, "runs", request.run_id); await mkdir(runDirectory, { recursive: true });
+  const campaignFile = join(campaignDirectory, "campaign.json"), requestFile = join(runDirectory, "request.json"); await writeFile(campaignFile, JSON.stringify(campaign)); await writeFile(requestFile, JSON.stringify(request));
+  await validateRepository(fixture.root);
+
+  campaign.preflight.harness_runtimes[0].resolved_runtime_version = "8.8.8"; await writeFile(campaignFile, JSON.stringify(campaign));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError
+    && error.diagnostics.some((item) => item.file.endsWith(`/runs/${request.run_id}/request.json`) && item.code === "semantic/campaign-preflight" && item.message.includes("does not match campaign preflight")));
+});
+
 test("run requests only use preflight from campaigns with matching experiment and suite pins", async () => {
   const matching = await campaignRunFixture(); await validateRepository(matching.root);
   for (const field of ["experiment", "suite"]) {

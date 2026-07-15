@@ -41,8 +41,10 @@ released, and retired archive sources require repository-verifiable path bytes.
 Released suites reference released tasks and their RFC 8785
 manifest digests. Campaign, run-request, and run-result experiment/suite/task
 references must resolve the exact loaded manifest path and digest. Run task
-references also pin the TaskSpec prompt, initial-state, and evaluator digests;
-run-request workspace fingerprints and network policy must exactly agree with the
+references also pin the TaskSpec prompt, initial-state, and evaluator digests.
+Campaign identity is scoped by experiment ID and campaign ID, matching the
+canonical `results/<experiment-id>/<campaign-id>/` layout. Run-request workspace
+fingerprints and network policy must exactly agree with the
 same TaskSpec. For OCI tasks, both request execution digest fields must equal the
 TaskSpec runtime image digest. Campaign and run suites must equal their
 experiment's pinned suite;

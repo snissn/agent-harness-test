@@ -97,9 +97,10 @@ async function canonicalArtifactDirectories(tasksDirectory: string): Promise<str
 
 function insideExamples(root: string, file: string): boolean { return relative(root, file).split(sep).join("/").startsWith("spec/examples/"); }
 function manifestOwnedPath(file: string): boolean { const parts = file.replace(/^\.\//, "").split(/[\\/]/); return parts[0] === "tasks" || parts[0] === "suites" || parts[0] === "experiments"; }
+function campaignIdentity(value: ObjectValue): string { return `${asString(asObject(value.experiment).id)}/${asString(value.campaign_id)}`; }
 function identity(manifest: Manifest): string | undefined {
   if (["task", "suite", "experiment"].includes(manifest.kind)) return `${asString(manifest.value.id)}@${asString(manifest.value.version)}`;
-  if (manifest.kind === "campaign") return asString(manifest.value.campaign_id);
+  if (manifest.kind === "campaign") return campaignIdentity(manifest.value);
   if (["run-request", "run-result"].includes(manifest.kind)) return asString(manifest.value.run_id);
   return undefined;
 }
@@ -399,7 +400,7 @@ export async function validateRepository(rootInput: string): Promise<void> {
         const bypassesSandbox = (invocation.argv as unknown[]).some((argument) => argument === "--dangerously-bypass-approvals-and-sandbox");
         if (invocation.full_access !== bypassesSandbox) diagnostics.push({ file: manifest.file, code: "semantic/invocation-full-access", message: "Codex full_access must match the sandbox-bypass argv flag" });
       }
-      const campaign = byKindIdentity.get(`campaign:${asString(manifest.value.campaign_id)}`);
+      const campaign = byKindIdentity.get(`campaign:${campaignIdentity(manifest.value)}`);
       if (!campaign) diagnostics.push({ file: manifest.file, code: "semantic/campaign-preflight", message: `run request requires campaign ${asString(manifest.value.campaign_id)} to verify invocation preflight` });
       else {
         const ownsRequest = manifestDigest(experimentReference) === manifestDigest(campaign.value.experiment) && manifestDigest(suiteReference) === manifestDigest(campaign.value.suite);
