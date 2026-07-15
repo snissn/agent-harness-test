@@ -1,10 +1,11 @@
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { basename, join, relative, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { manifestDigest, sha256 } from "./digests.js";
 import { SchemaValidator } from "./schema.js";
 
 type Json = Record<string, any>;
+function portable(path: string): string { return path.split(sep).join("/"); }
 export const REPORT_DATA_VERSION = "0.1.0";
 
 async function json(path: string): Promise<Json> { return JSON.parse(await readFile(path, "utf8")) as Json; }
@@ -33,7 +34,9 @@ CREATE TABLE runs (id TEXT PRIMARY KEY, campaign_id TEXT, configuration_id TEXT,
 CREATE TABLE ingestion_errors (source TEXT, code TEXT, message TEXT);
 CREATE TABLE lineage (run_id TEXT, parent_run_id TEXT, attempt_mode TEXT);`);
   const validator = await SchemaValidator.create(join(root, "spec/schemas"));
-  const campaignFiles = (await files(results)).filter(path => path.endsWith("/campaign.json")).sort();
+  if (output === root || output === results || !output.startsWith(`${root}${sep}`)) throw new Error("report output must be a disposable directory below repository root");
+  const campaignFiles = (await files(results)).filter(path => basename(path) === "campaign.json").sort();
+  db.exec("BEGIN IMMEDIATE");
   const errors: Json[] = [], rows: Json[] = [];
   const taskMetadata = new Map<string, Json>();
   for (const path of (await files(join(root, "tasks"))).filter(path => /\/task\.json$/.test(path))) { const task = await json(path); taskMetadata.set(`${task.id}@${task.version}`, task); }
@@ -59,12 +62,13 @@ CREATE TABLE lineage (run_id TEXT, parent_run_id TEXT, attempt_mode TEXT);`);
         const evaluation = run.evaluation ?? {}, metrics = run.metrics ?? {}, timing = metrics.timing ?? {}, tokens = metrics.tokens ?? {}, cost = metrics.cost ?? {}, resources = metrics.resources ?? {};
         const row = { campaign_id: campaign.campaign_id, observed_at: campaign.observed_at, mode: campaign.mode, configuration_id: run.configuration_id, task: `${run.task.id}@${run.task.version}`, category: task.category ?? "unknown", languages: task.languages ?? [], attempt: run.attempt, terminal: run.terminal, evaluation, metrics, compatible_key: JSON.stringify({ suite: campaign.suite, task: run.task, harness: run.resolved_configuration.harness, model: run.resolved_configuration.model, effort: run.resolved_configuration.effort, topology: run.provenance.execution }) };
         rows.push(row);
-        db.prepare("INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(run.run_id, campaign.campaign_id, run.configuration_id, row.task, row.category, JSON.stringify(row.languages), run.attempt.number, run.attempt.mode, run.terminal.reason, run.terminal.attribution, Number(run.terminal.operational_success), Number(evaluation.eligible_for_quality_aggregate), metric(evaluation.artifact_quality_score), Number(evaluation.end_to_end_passed === true), timing.status ?? "unavailable", metric(timing.wall_time_ms), tokens.status ?? "unavailable", metric(tokens.total), cost.status ?? "unavailable", metric(cost.amount), resources.status ?? "unavailable");
+        db.prepare("INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(run.run_id, campaign.campaign_id, run.configuration_id, row.task, row.category, JSON.stringify(row.languages), run.attempt.number, run.attempt.mode, run.terminal.reason, run.terminal.attribution, run.terminal.operational_success === true ? 1 : 0, evaluation.eligible_for_quality_aggregate === true ? 1 : 0, metric(evaluation.artifact_quality_score), Number(evaluation.end_to_end_passed === true), timing.status ?? "unavailable", metric(timing.wall_time_ms), tokens.status ?? "unavailable", metric(tokens.total), cost.status ?? "unavailable", metric(cost.amount), resources.status ?? "unavailable");
         if (run.attempt.number > 1) db.prepare("INSERT INTO lineage VALUES (?, ?, ?)").run(run.run_id, run.attempt.parent_run_id ?? null, run.attempt.mode);
       } catch (error) { errors.push({ source: relative(root, runPath), code: "invalid-run", message: String(error).replaceAll(root, "[REPOSITORY]") }); }
     }
   }
   for (const error of errors) db.prepare("INSERT INTO ingestion_errors VALUES (?, ?, ?)").run(error.source, error.code, error.message);
+  db.exec("COMMIT");
   const initial = rows.filter(row => row.attempt.number === 1 && row.attempt.mode === "initial");
   const configs = [...new Set(initial.map(row => row.configuration_id))].sort().map(configuration_id => {
     const set = initial.filter(row => row.configuration_id === configuration_id), quality = set.filter(row => row.evaluation.eligible_for_quality_aggregate === true);
