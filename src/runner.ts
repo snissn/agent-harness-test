@@ -1,49 +1,763 @@
-import { cp, lstat, link, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  cp,
+  lstat,
+  link,
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { performance } from "node:perf_hooks";
 import { manifestDigest, sha256, treeDigest } from "./digests.js";
 import { SchemaValidator } from "./schema.js";
 
-export type RunnerState = "new" | "request-finalized" | "materialized" | "running" | "captured" | "evaluated" | "finalized" | "failed";
-export type Attribution = "agent" | "provider" | "harness" | "environment" | "runner" | "operator";
-export type TerminalReason = "agent_completed" | "wall_time_exhausted" | "token_limit_exhausted" | "tool_limit_exhausted" | "agent_failed" | "provider_error" | "harness_error" | "environment_error" | "runner_error" | "cancelled";
-export class RunnerError extends Error { constructor(public readonly code: string, message: string, public readonly attribution: Attribution = "runner") { super(message); } }
-const transitions: Record<RunnerState, RunnerState[]> = { new: ["request-finalized", "failed"], "request-finalized": ["materialized", "failed"], materialized: ["running", "failed"], running: ["captured", "failed"], captured: ["evaluated", "finalized", "failed"], evaluated: ["finalized", "failed"], finalized: [], failed: ["finalized"] };
-export const TERMINAL_ATTRIBUTION: Record<TerminalReason, Attribution> = { agent_completed: "agent", wall_time_exhausted: "runner", token_limit_exhausted: "runner", tool_limit_exhausted: "runner", agent_failed: "agent", provider_error: "provider", harness_error: "harness", environment_error: "environment", runner_error: "runner", cancelled: "operator" };
-export class AttemptState { state: RunnerState = "new"; transition(next: RunnerState): void { if (!transitions[this.state].includes(next)) throw new RunnerError("runner.illegal-transition", `${this.state} cannot transition to ${next}`); this.state = next; } fail(): void { this.transition("failed"); } finalize(): void { if (!transitions[this.state].includes("finalized")) throw new RunnerError("runner.illegal-transition", `${this.state} cannot transition to finalized`); this.state = "finalized"; } }
-export interface HarnessResult { terminal: TerminalReason; stdout?: string; stderr?: string; events?: unknown[]; finalMessage?: string; exitCode?: number | null; signal?: string; tokens?: Record<string, unknown>; toolUsage?: Record<string, unknown>; cost?: Record<string, unknown>; }
-export interface HarnessAdapter { run(input: { workspace: string; prompt: string; request: Record<string, any>; signal: AbortSignal }): Promise<HarnessResult>; }
-/** Process adapters must implement terminate when their child can outlive an AbortSignal. */
-export interface ControlledHarnessAdapter extends HarnessAdapter { terminate?(reason: "wall_time_exhausted"): Promise<void>; }
-export interface Timer { set(delayMs: number, callback: () => void): unknown; clear(handle: unknown): void; }
-export const systemTimer: Timer = { set: (delayMs, callback) => setTimeout(callback, delayMs), clear: (handle) => clearTimeout(handle as NodeJS.Timeout) };
-export async function runWithHardTimeout(adapter: ControlledHarnessAdapter, input: Parameters<HarnessAdapter["run"]>[0], timeoutMs: number, timer: Timer = systemTimer): Promise<HarnessResult> {
-  const controller = new AbortController(); const run = adapter.run({ ...input, signal: controller.signal });
-  let handle: unknown; const exhausted = new Promise<HarnessResult>((resolve) => { handle = timer.set(timeoutMs, () => { controller.abort(); void adapter.terminate?.("wall_time_exhausted"); resolve({ terminal: "wall_time_exhausted", events: [{ type: "runner.timeout" }], stderr: "hard wall time exhausted", exitCode: null }); }); });
-  try { return await Promise.race([run, exhausted]); } finally { timer.clear(handle); void run.catch(() => undefined); }
-}
-export interface Evaluator { evaluate(input: { workspace: string; request: Record<string, any> }): Promise<Record<string, any>>; }
-export class FakeHarnessAdapter implements HarnessAdapter {
-  constructor(private readonly scenario: "success" | "timeout" | "token-limit" | "tool-limit" | "malformed-stream" | "provider-error" | "harness-error" | "cancelled" = "success", private readonly delayMs = 0) {}
-  async run(input: { workspace: string; prompt: string; request: Record<string, any>; signal: AbortSignal }): Promise<HarnessResult> {
-    await writeFile(join(input.workspace, "fake-harness.txt"), `scenario=${this.scenario}\n`);
-    if (this.delayMs) await new Promise<void>((done) => { const timer = setTimeout(done, this.delayMs); input.signal.addEventListener("abort", () => { clearTimeout(timer); done(); }, { once: true }); });
-    if (input.signal.aborted || this.scenario === "timeout") return { terminal: "wall_time_exhausted", events: [{ type: "started" }], stderr: "fake timeout", exitCode: null };
-    const terminal: TerminalReason = this.scenario === "success" ? "agent_completed" : this.scenario === "token-limit" ? "token_limit_exhausted" : this.scenario === "tool-limit" ? "tool_limit_exhausted" : this.scenario === "provider-error" ? "provider_error" : this.scenario === "harness-error" || this.scenario === "malformed-stream" ? "harness_error" : "cancelled";
-    return { terminal, events: [{ type: "turn.started" }, { type: "turn.completed" }], stdout: "fake stdout\n", stderr: terminal === "agent_completed" ? "" : `fake ${terminal}\n`, ...(terminal === "agent_completed" ? { finalMessage: "fake completed" } : {}), exitCode: terminal === "agent_completed" ? 0 : 1 };
+export type RunnerState =
+  | "new"
+  | "request-finalized"
+  | "materialized"
+  | "running"
+  | "captured"
+  | "evaluated"
+  | "finalized"
+  | "failed";
+export type Attribution =
+  | "agent"
+  | "provider"
+  | "harness"
+  | "environment"
+  | "runner"
+  | "operator";
+export type TerminalReason =
+  | "agent_completed"
+  | "wall_time_exhausted"
+  | "token_limit_exhausted"
+  | "tool_limit_exhausted"
+  | "agent_failed"
+  | "provider_error"
+  | "harness_error"
+  | "environment_error"
+  | "runner_error"
+  | "cancelled";
+
+export class RunnerError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+    public readonly attribution: Attribution = "runner",
+  ) {
+    super(message);
   }
 }
-export async function atomicWrite(file: string, value: string | Uint8Array): Promise<void> { await mkdir(dirname(file), { recursive: true }); const temp = `${file}.tmp-${process.pid}-${Date.now()}-${Math.random()}`; await writeFile(temp, value, { flag: "wx" }); try { await link(temp, file); } catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new RunnerError("runner.artifact-exists", `refusing to overwrite ${file}`); throw error; } finally { await rm(temp, { force: true }); } }
-export function redact(value: string, secrets: string[]): string { return secrets.reduce((out, secret) => secret ? out.split(secret).join("[REDACTED]") : out, value); }
-async function exists(file: string): Promise<boolean> { try { await lstat(file); return true; } catch { return false; } }
-async function bytes(dir: string): Promise<number> { if (!(await exists(dir))) return 0; let total = 0; async function walk(path: string): Promise<void> { for (const e of await readdir(path, { withFileTypes: true })) { const f = join(path, e.name); if (e.isDirectory()) await walk(f); else if (e.isFile()) total += (await lstat(f)).size; } } await walk(dir); return total; }
-function score(raw: Record<string, any>, checks: Array<Record<string, any>>, terminal: TerminalReason, attempt: Record<string, any>, digest: string): Record<string, any> { if (raw.status !== "ok") return { status: "error", reason: raw.error_message ?? "evaluator error", eligible_for_quality_aggregate: false }; const got = new Map((raw.checks as Array<Record<string, any>>).map((c) => [c.id, c])); if (got.size !== checks.length || checks.some((c) => !got.has(c.id))) return { status: "error", reason: "evaluator check IDs do not exactly match task checks", eligible_for_quality_aggregate: false }; const entries: Array<Record<string, any>> = checks.map((c) => ({ ...got.get(c.id), weight: c.weight, required: c.required })); const quality = entries.reduce((s, c) => s + c.score * c.weight, 0) / entries.reduce((s, c) => s + c.weight, 0); const criteria = entries.filter((c) => c.required).every((c) => c.passed); const eligible = attempt.mode === "initial" && (terminal === "agent_completed" || terminal === "agent_failed"); return { status: "ok", result_artifact_digest: digest, checks: entries, artifact_quality_score: quality, criteria_passed: criteria, agent_completion_required: true, end_to_end_passed: criteria && terminal === "agent_completed" && eligible, eligible_for_quality_aggregate: eligible }; }
-export interface RunOptions { root: string; stateSource: string; prompt: string; adapter: HarnessAdapter; evaluator: Evaluator; taskChecks: Array<Record<string, any>>; schemaDirectory?: string; }
+
+const transitions: Record<RunnerState, RunnerState[]> = {
+  new: ["request-finalized", "failed"],
+  "request-finalized": ["materialized", "failed"],
+  materialized: ["running", "failed"],
+  running: ["captured", "failed"],
+  captured: ["evaluated", "finalized", "failed"],
+  evaluated: ["finalized", "failed"],
+  finalized: [],
+  failed: ["finalized"],
+};
+export const TERMINAL_ATTRIBUTION: Record<TerminalReason, Attribution> = {
+  agent_completed: "agent",
+  wall_time_exhausted: "runner",
+  token_limit_exhausted: "runner",
+  tool_limit_exhausted: "runner",
+  agent_failed: "agent",
+  provider_error: "provider",
+  harness_error: "harness",
+  environment_error: "environment",
+  runner_error: "runner",
+  cancelled: "operator",
+};
+export class AttemptState {
+  state: RunnerState = "new";
+  transition(next: RunnerState): void {
+    if (!transitions[this.state].includes(next))
+      throw new RunnerError(
+        "runner.illegal-transition",
+        `${this.state} cannot transition to ${next}`,
+      );
+    this.state = next;
+  }
+  fail(): void {
+    this.transition("failed");
+  }
+  finalize(): void {
+    this.transition("finalized");
+  }
+}
+
+export interface HarnessResult {
+  terminal: TerminalReason;
+  stdout?: string;
+  stderr?: string;
+  events?: unknown[];
+  finalMessage?: string;
+  exitCode?: number | null;
+  signal?: string;
+  tokens?: Record<string, unknown>;
+  toolUsage?: Record<string, unknown>;
+  cost?: Record<string, unknown>;
+  externalRequestId?: string;
+}
+export interface HarnessAdapter {
+  run(input: {
+    workspace: string;
+    prompt: string;
+    request: Record<string, unknown>;
+    signal: AbortSignal;
+  }): Promise<HarnessResult>;
+}
+/** A process adapter must kill its child/process group here. Abort alone is only cooperative. */
+export interface ControlledHarnessAdapter extends HarnessAdapter {
+  terminate?(reason: "wall_time_exhausted"): Promise<void>;
+}
+export interface Timer {
+  set(delayMs: number, callback: () => void): unknown;
+  clear(handle: unknown): void;
+}
+export const systemTimer: Timer = {
+  set: (ms, cb) => setTimeout(cb, ms),
+  clear: (h) => clearTimeout(h as NodeJS.Timeout),
+};
+
+/** Races the adapter only after controller enforcement has fired. Late adapter results are deliberately ignored. */
+export async function runWithHardTimeout(
+  adapter: ControlledHarnessAdapter,
+  input: Parameters<HarnessAdapter["run"]>[0],
+  timeoutMs: number,
+  timer: Timer = systemTimer,
+): Promise<HarnessResult> {
+  const controller = new AbortController();
+  let settled = false;
+  const run = adapter.run({ ...input, signal: controller.signal });
+  const timedOut = new Promise<HarnessResult>((resolve) => {
+    const fire = async () => {
+      if (settled) return;
+      controller.abort();
+      await adapter.terminate?.("wall_time_exhausted");
+      if (!settled) {
+        settled = true;
+        resolve({
+          terminal: "wall_time_exhausted",
+          events: [{ type: "runner.timeout", enforcement: "terminate" }],
+          stderr: "hard wall time exhausted",
+          exitCode: null,
+        });
+      }
+    };
+    const handle = timer.set(timeoutMs, () => void fire());
+    run.finally(() => timer.clear(handle)).catch(() => undefined);
+  });
+  try {
+    const result = await Promise.race([run, timedOut]);
+    settled = true;
+    return result;
+  } finally {
+    void run.catch(() => undefined);
+  }
+}
+
+export interface Evaluator {
+  evaluate(input: {
+    workspace: string;
+    request: Record<string, unknown>;
+  }): Promise<Record<string, unknown>>;
+}
+export type FakeScenario =
+  | "success"
+  | "timeout"
+  | "token-limit"
+  | "tool-limit"
+  | "malformed-stream"
+  | "provider-error"
+  | "harness-error"
+  | "cancelled";
+export class FakeHarnessAdapter implements ControlledHarnessAdapter {
+  private terminated = false;
+  constructor(
+    private readonly scenario: FakeScenario = "success",
+    private readonly delayMs = 0,
+    private readonly ignoreAbort = false,
+  ) {}
+  async terminate(): Promise<void> {
+    this.terminated = true;
+  }
+  async run(
+    input: Parameters<HarnessAdapter["run"]>[0],
+  ): Promise<HarnessResult> {
+    await writeFile(
+      join(input.workspace, "fake-harness.txt"),
+      `scenario=${this.scenario}\n`,
+    );
+    if (this.scenario === "timeout")
+      await new Promise<void>((resolve) =>
+        setTimeout(resolve, Math.max(this.delayMs, 50)),
+      );
+    if (this.delayMs)
+      await new Promise<void>((resolve) => {
+        const h = setTimeout(resolve, this.delayMs);
+        if (!this.ignoreAbort)
+          input.signal.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(h);
+              resolve();
+            },
+            { once: true },
+          );
+      });
+    if (this.terminated || input.signal.aborted)
+      return {
+        terminal: "wall_time_exhausted",
+        events: [{ type: "started" }],
+        stderr: "fake timeout",
+        exitCode: null,
+      };
+    const terminal: TerminalReason =
+      this.scenario === "success"
+        ? "agent_completed"
+        : this.scenario === "token-limit"
+          ? "token_limit_exhausted"
+          : this.scenario === "tool-limit"
+            ? "tool_limit_exhausted"
+            : this.scenario === "provider-error"
+              ? "provider_error"
+              : this.scenario === "harness-error" ||
+                  this.scenario === "malformed-stream"
+                ? "harness_error"
+                : "cancelled";
+    return {
+      terminal,
+      events:
+        this.scenario === "malformed-stream"
+          ? [{ broken: true }]
+          : [{ type: "turn.started" }, { type: "turn.completed" }],
+      stdout: "fake stdout\n",
+      stderr: terminal === "agent_completed" ? "" : `fake ${terminal}\n`,
+      ...(terminal === "agent_completed"
+        ? { finalMessage: "fake completed" }
+        : {}),
+      exitCode: terminal === "agent_completed" ? 0 : 1,
+    };
+  }
+}
+
+export async function atomicWrite(
+  file: string,
+  value: string | Uint8Array,
+): Promise<void> {
+  await mkdir(dirname(file), { recursive: true });
+  const temp = `${file}.tmp-${process.pid}-${Date.now()}-${Math.random()}`;
+  await writeFile(temp, value, { flag: "wx" });
+  try {
+    await link(temp, file);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST")
+      throw new RunnerError(
+        "runner.artifact-exists",
+        `refusing to overwrite ${file}`,
+      );
+    throw error;
+  } finally {
+    await rm(temp, { force: true });
+  }
+}
+export function redact(value: string, secrets: string[]): string {
+  return secrets.reduce(
+    (out, secret) => (secret ? out.split(secret).join("[REDACTED]") : out),
+    value,
+  );
+}
+const cloneFreeze = <T>(value: T): T => {
+  const copy = JSON.parse(JSON.stringify(value)) as T;
+  const freeze = (v: unknown): unknown => {
+    if (v && typeof v === "object") {
+      Object.values(v as Record<string, unknown>).forEach(freeze);
+      Object.freeze(v);
+    }
+    return v;
+  };
+  return freeze(copy) as T;
+};
+async function exists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function workspaceBytes(dir: string): Promise<number> {
+  let total = 0;
+  if (!(await exists(dir))) return total;
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const file = join(dir, entry.name);
+    if (entry.isDirectory()) total += await workspaceBytes(file);
+    else if (entry.isFile()) total += (await lstat(file)).size;
+  }
+  return total;
+}
+async function treeManifest(
+  root: string,
+): Promise<Array<Record<string, unknown>>> {
+  const output: Array<Record<string, unknown>> = [];
+  async function walk(dir: string): Promise<void> {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      const name = relative(root, path).replaceAll("\\", "/");
+      if (entry.isDirectory()) {
+        output.push({ type: "directory", path: name });
+        await walk(path);
+      } else if (entry.isFile())
+        output.push({
+          type: "file",
+          path: name,
+          bytes: (await lstat(path)).size,
+          digest: `sha256:${sha256(await readFile(path))}`,
+        });
+      else if (entry.isSymbolicLink())
+        output.push({ type: "symlink", path: name });
+    }
+  }
+  await walk(root);
+  return output.sort((a, b) => String(a.path).localeCompare(String(b.path)));
+}
+function diffManifest(
+  initial: Array<Record<string, unknown>>,
+  final: Array<Record<string, unknown>>,
+): string {
+  const a = new Map(initial.map((e) => [String(e.path), JSON.stringify(e)]));
+  const b = new Map(final.map((e) => [String(e.path), JSON.stringify(e)]));
+  return (
+    [...new Set([...a.keys(), ...b.keys()])]
+      .sort()
+      .flatMap((path) =>
+        a.get(path) === b.get(path)
+          ? []
+          : [
+              `--- ${a.has(path) ? path : "/dev/null"}`,
+              `+++ ${b.has(path) ? path : "/dev/null"}`,
+              `${a.get(path) ?? ""}`,
+              `${b.get(path) ?? ""}`,
+            ],
+      )
+      .join("\n") + "\n"
+  );
+}
+function unavailable(source: string, reason: string): Record<string, unknown> {
+  return { status: "unavailable", source, unavailable_reason: reason };
+}
+function evaluationSummary(
+  raw: Record<string, unknown>,
+  checks: Array<Record<string, unknown>>,
+  terminal: TerminalReason,
+  attempt: Record<string, unknown>,
+  digest: string,
+): Record<string, unknown> {
+  if (raw.status !== "ok")
+    return {
+      status: "error",
+      reason: String(raw.error_message ?? "evaluator error"),
+      eligible_for_quality_aggregate: false,
+    };
+  const received = Array.isArray(raw.checks)
+    ? (raw.checks as Array<Record<string, unknown>>)
+    : [];
+  const got = new Map(received.map((c) => [c.id, c]));
+  if (got.size !== checks.length || checks.some((c) => !got.has(c.id)))
+    return {
+      status: "error",
+      reason: "evaluator check IDs do not exactly match task checks",
+      eligible_for_quality_aggregate: false,
+    };
+  const entries: Array<Record<string, unknown>> = checks.map((c) => ({
+    ...got.get(c.id),
+    weight: c.weight,
+    required: c.required,
+  }));
+  const quality =
+    entries.reduce((n, c) => n + Number(c.score) * Number(c.weight), 0) /
+    entries.reduce((n, c) => n + Number(c.weight), 0);
+  const criteria = entries
+    .filter((c) => c.required)
+    .every((c) => c.passed === true);
+  const eligible =
+    attempt.mode === "initial" &&
+    [
+      "agent_completed",
+      "agent_failed",
+      "wall_time_exhausted",
+      "token_limit_exhausted",
+      "tool_limit_exhausted",
+    ].includes(terminal);
+  return {
+    status: "ok",
+    result_artifact_digest: digest,
+    checks: entries,
+    artifact_quality_score: quality,
+    criteria_passed: criteria,
+    agent_completion_required: true,
+    end_to_end_passed: criteria && terminal === "agent_completed" && eligible,
+    eligible_for_quality_aggregate: eligible,
+  };
+}
+
+export interface RunOptions {
+  root: string;
+  stateSource: string;
+  prompt: string;
+  adapter: ControlledHarnessAdapter;
+  evaluator: Evaluator;
+  taskChecks: Array<Record<string, unknown>>;
+  schemaDirectory?: string;
+  timer?: Timer;
+  runtimeRedactions?: string[];
+  runnerGitCommit?: string;
+}
 export class DeterministicRunner {
-  async run(request: Record<string, any>, o: RunOptions): Promise<Record<string, any>> {
-    const schema = o.schemaDirectory ? await SchemaValidator.create(o.schemaDirectory) : undefined; schema?.validate("run-request", request); const state = new AttemptState(); const dir = join(o.root, "results", request.experiment.id, request.campaign_id, "runs", request.run_id), workspace = join(dir, "workspace"); await mkdir(dir, { recursive: true }); await atomicWrite(join(dir, "request.json"), JSON.stringify(request)); state.transition("request-finalized"); const startedAt = new Date(), started = performance.now(), phases: Record<string, number> = {}; const phase = async <T>(n: string, fn: () => Promise<T>): Promise<T> => { const at = performance.now(); try { return await fn(); } finally { phases[n] = Math.round(performance.now() - at); } }; let terminal: TerminalReason = "runner_error", harness: HarnessResult | undefined, errors: Array<Record<string, unknown>> = [], post = `tree-sha256-v1:${"0".repeat(64)}`, final = post, evaluation: Record<string, any> = { status: "not-run", reason: "no salvageable workspace", eligible_for_quality_aggregate: false };
-    try { await phase("materialization", async () => { await cp(o.stateSource, workspace, { recursive: true, errorOnExist: true }); post = await treeDigest(workspace); if (post !== request.workspace.initial_tree_digest) throw new RunnerError("environment.initial-tree-digest-mismatch", "initial state digest mismatch", "environment"); }); state.transition("materialized"); const ctl = new AbortController(), timeout = setTimeout(() => ctl.abort(), request.configuration.limits.wall_time_seconds.value * 1000); state.transition("running"); harness = await phase("agent", () => o.adapter.run({ workspace, prompt: o.prompt, request, signal: ctl.signal })); clearTimeout(timeout); terminal = harness.terminal; state.transition("captured"); await atomicWrite(join(dir, "events.native.jsonl"), (harness!.events ?? []).map((event) => JSON.stringify(event)).join("\n")); await atomicWrite(join(dir, "stdout.log"), redact(harness!.stdout ?? "", request.invocation.secret_names ?? [])); await atomicWrite(join(dir, "stderr.log"), redact(harness!.stderr ?? "", request.invocation.secret_names ?? [])); await atomicWrite(join(dir, "final-message.txt"), redact(harness!.finalMessage ?? "", request.invocation.secret_names ?? [])); } catch (e) { const err = e instanceof RunnerError ? e : new RunnerError("runner.unhandled", e instanceof Error ? e.message : String(e)); terminal = err.attribution === "environment" ? "environment_error" : "runner_error"; state.fail(); errors.push({ occurred_at: new Date().toISOString(), phase: "materialization", code: err.code, attribution: err.attribution, retryable: false, message: redact(err.message, request.invocation.secret_names ?? []) }); }
-    if (await exists(workspace)) { await phase("snapshot", async () => { final = await treeDigest(workspace); await atomicWrite(join(dir, "workspace-tree.json"), JSON.stringify({ digest: final })); await atomicWrite(join(dir, "workspace.patch"), "# patch capture requires a VCS-aware adapter\n"); }); try { const raw = await phase("evaluation", () => o.evaluator.evaluate({ workspace, request })); await atomicWrite(join(dir, "evaluator.json"), JSON.stringify(raw)); evaluation = score(raw, o.taskChecks, terminal, request.attempt, `sha256:${sha256(await readFile(join(dir, "evaluator.json")))}`); if (evaluation.status === "error") errors.push({ occurred_at: new Date().toISOString(), phase: "evaluation", code: "evaluator.invalid-output", attribution: "runner", retryable: false, message: evaluation.reason }); } catch (e) { evaluation = { status: "error", reason: "evaluator error", eligible_for_quality_aggregate: false }; errors.push({ occurred_at: new Date().toISOString(), phase: "evaluation", code: "evaluator.error", attribution: "runner", retryable: false, message: e instanceof Error ? e.message : String(e) }); } }
-    const base = join(o.root, "results", request.experiment.id, request.campaign_id); const spec: Array<[string, string, string]> = [["request.json", "request", "application/json"], ["events.native.jsonl", "native-events", "application/x-ndjson"], ["stdout.log", "stdout", "text/plain"], ["stderr.log", "stderr", "text/plain"], ["final-message.txt", "final-message", "text/plain"], ["workspace.patch", "workspace-patch", "text/x-diff"], ["workspace-tree.json", "workspace-tree", "application/json"], ["evaluator.json", "evaluator-result", "application/json"]]; const present = await Promise.all(spec.map(async (item) => await exists(join(dir, item[0])) ? item : undefined)); const artifacts = await Promise.all(present.filter((item): item is [string, string, string] => item !== undefined).map(async ([n, kind, media_type]) => { const b = await readFile(join(dir, n)); return { kind, path: relative(base, join(dir, n)).replaceAll("\\", "/"), digest: `sha256:${sha256(b)}`, media_type, bytes: b.length }; })); const finish = new Date(); const result: Record<string, any> = { schema_version: "0.2.0", run_id: request.run_id, campaign_id: request.campaign_id, experiment: request.experiment, suite: request.suite, task: request.task, configuration_id: request.configuration.id, repetition: request.repetition, schedule_index: request.schedule_index, attempt: request.attempt, observed_at: finish.toISOString(), started_at: startedAt.toISOString(), finished_at: finish.toISOString(), terminal: { reason: terminal, attribution: TERMINAL_ATTRIBUTION[terminal], operational_success: terminal === "agent_completed", exit_code: harness?.exitCode ?? null }, resolved_configuration: { harness: request.configuration.harness, model: { provider: request.configuration.model.provider, requested_id: request.configuration.model.requested_id, snapshot_available: false }, effort: request.configuration.effort, limits: request.configuration.limits, effective_config_digest: manifestDigest(request.configuration) }, provenance: { runner_version: "0.2.0", runner_git_commit: "0000000", runner_runtime: { name: "node", version: process.version.slice(1) }, request_digest: manifestDigest(request), host: { operating_system: process.platform, architecture: process.arch }, execution: request.execution, post_setup_tree_digest: post, final_tree_digest: final }, metrics: { timing: { clock_source: "monotonic", wall_time_ms: Math.round(performance.now() - started), phases_ms: phases }, tokens: harness?.tokens ?? { status: "unavailable", source: "fake-harness", unavailable_reason: "fake adapter did not expose tokens" }, tool_usage: harness?.toolUsage ?? { status: "unavailable", source: "fake-harness", unavailable_reason: "fake adapter did not expose tool usage" }, cost: harness?.cost ?? { status: "unavailable", source: "fake-harness", unavailable_reason: "fake adapter did not expose cost" }, resources: { status: "partial", source: "runner-workspace", partial_reason: "fake adapter does not expose process counters", scope: "agent-process", workspace_initial_bytes: 0, workspace_final_bytes: await bytes(workspace), workspace_delta_bytes: await bytes(workspace) } }, evaluation, errors, artifacts, warnings: [] }; schema?.validate("run-result", result); await phase("finalization", () => atomicWrite(join(dir, "run.json"), JSON.stringify(result))); state.finalize(); return result;
+  async run(
+    inputRequest: Record<string, unknown>,
+    o: RunOptions,
+  ): Promise<Record<string, any>> {
+    const request = cloneFreeze(inputRequest);
+    const secrets = o.runtimeRedactions ?? [];
+    const schema = o.schemaDirectory
+      ? await SchemaValidator.create(o.schemaDirectory)
+      : undefined;
+    schema?.validate("run-request", request);
+    if (
+      sha256(o.prompt) !==
+        String((request.task as any).prompt_digest).replace("sha256:", "") ||
+      sha256(o.prompt) !==
+        String((request.invocation as any).stdin_digest).replace("sha256:", "")
+    )
+      throw new RunnerError(
+        "environment.prompt-or-stdin-digest-mismatch",
+        "prompt and stdin bytes do not match finalized request",
+        "environment",
+      );
+    const target = request.artifact_targets as Record<string, string>;
+    const root = join(
+      o.root,
+      "results",
+      (request.experiment as any).id,
+      String(request.campaign_id),
+      "runs",
+      String(request.run_id),
+    );
+    const workspace = join(root, "workspace");
+    const state = new AttemptState();
+    await mkdir(root, { recursive: true });
+    await atomicWrite(
+      join(root, target.request!),
+      redact(JSON.stringify(request), secrets),
+    );
+    state.transition("request-finalized");
+    const startedAt = new Date();
+    const started = performance.now();
+    const phases: Record<string, number> = {};
+    const errors: Array<Record<string, unknown>> = [];
+    let terminal: TerminalReason = "runner_error";
+    let harness: HarnessResult | undefined;
+    let post = `tree-sha256-v1:${"0".repeat(64)}`;
+    let final = post;
+    let initialBytes = 0;
+    let evaluation: Record<string, unknown> = {
+      status: "not-run",
+      reason: "no salvageable workspace",
+      eligible_for_quality_aggregate: false,
+    };
+    const phase = async <T>(name: string, fn: () => Promise<T>): Promise<T> => {
+      const at = performance.now();
+      try {
+        return await fn();
+      } finally {
+        phases[name] = Math.round(performance.now() - at);
+      }
+    };
+    const error = (
+      phaseName: "materialization" | "agent" | "evaluation",
+      e: unknown,
+      attribution: Attribution | "evaluator",
+      code: string,
+    ) =>
+      errors.push({
+        occurred_at: new Date().toISOString(),
+        phase: phaseName,
+        code,
+        attribution,
+        retryable: false,
+        message: redact(e instanceof Error ? e.message : String(e), secrets),
+        exit_code: harness?.exitCode ?? null,
+        ...(harness?.signal ? { signal: harness.signal } : {}),
+        ...(harness?.externalRequestId
+          ? { external_request_id: harness.externalRequestId }
+          : {}),
+      });
+    try {
+      await phase("materialization", async () => {
+        await cp(o.stateSource, workspace, {
+          recursive: true,
+          errorOnExist: true,
+        });
+        post = await treeDigest(workspace);
+        if (
+          post !== (request.workspace as any).initial_tree_digest ||
+          post !== (request.task as any).initial_tree_digest
+        )
+          throw new RunnerError(
+            "environment.initial-tree-digest-mismatch",
+            "initial state digest mismatch",
+            "environment",
+          );
+        initialBytes = await workspaceBytes(workspace);
+      });
+      state.transition("materialized");
+      state.transition("running");
+      harness = await phase("agent", () =>
+        runWithHardTimeout(
+          o.adapter,
+          {
+            workspace,
+            prompt: o.prompt,
+            request,
+            signal: new AbortController().signal,
+          },
+          Number(
+            (request.configuration as any).limits.wall_time_seconds.value,
+          ) * 1000,
+          o.timer,
+        ),
+      );
+      terminal = harness.terminal;
+      state.transition("captured");
+    } catch (e) {
+      const r =
+        e instanceof RunnerError
+          ? e
+          : new RunnerError(
+              "runner.unhandled",
+              e instanceof Error ? e.message : String(e),
+            );
+      terminal =
+        r.attribution === "environment" ? "environment_error" : "runner_error";
+      if (state.state !== "failed") state.fail();
+      error("materialization", r, r.attribution, r.code);
+    }
+    const write = async (name: keyof typeof target, text: string) =>
+      atomicWrite(join(root, target[name]!), redact(text, secrets));
+    await write(
+      "native_events",
+      (harness?.events ?? []).map((event) => JSON.stringify(event)).join("\n"),
+    );
+    await write("stdout", harness?.stdout ?? "");
+    await write("stderr", harness?.stderr ?? "");
+    await write("final_message", harness?.finalMessage ?? "");
+    if (await exists(workspace)) {
+      const initialManifest = await treeManifest(o.stateSource);
+      const finalManifest = await phase("snapshot", () =>
+        treeManifest(workspace),
+      );
+      final = await treeDigest(workspace);
+      await write(
+        "workspace_tree",
+        JSON.stringify({ digest: final, entries: finalManifest }),
+      );
+      await write(
+        "workspace_patch",
+        diffManifest(initialManifest, finalManifest),
+      );
+      const protectedWorkspace = join(root, ".evaluator-workspace");
+      try {
+        await cp(workspace, protectedWorkspace, { recursive: true });
+        const raw = await phase("evaluation", () =>
+          o.evaluator.evaluate({ workspace: protectedWorkspace, request }),
+        );
+        schema?.validate("evaluation", raw);
+        await write("evaluator_result", JSON.stringify(raw));
+        const evaluatorBytes = await readFile(
+          join(root, target.evaluator_result!),
+        );
+        evaluation = evaluationSummary(
+          raw,
+          o.taskChecks,
+          terminal,
+          request.attempt as Record<string, unknown>,
+          `sha256:${sha256(evaluatorBytes)}`,
+        );
+        if (evaluation.status === "error")
+          error(
+            "evaluation",
+            new Error(String(evaluation.reason)),
+            "evaluator",
+            "evaluator.invalid-output",
+          );
+      } catch (e) {
+        const message = redact(
+          e instanceof Error ? e.message : String(e),
+          secrets,
+        );
+        const raw = {
+          schema_version: "0.2.0",
+          task_id: (request.task as any).id,
+          task_version: (request.task as any).version,
+          status: "error",
+          started_at: new Date().toISOString(),
+          finished_at: new Date().toISOString(),
+          duration_ms: 0,
+          error_message: message || "evaluator error",
+        };
+        schema?.validate("evaluation", raw);
+        await write("evaluator_result", JSON.stringify(raw));
+        evaluation = {
+          status: "error",
+          reason: "evaluator error",
+          eligible_for_quality_aggregate: false,
+        };
+        error("evaluation", e, "evaluator", "evaluator.error");
+      } finally {
+        await rm(protectedWorkspace, { recursive: true, force: true });
+      }
+    }
+    const base = join(
+      o.root,
+      "results",
+      (request.experiment as any).id,
+      String(request.campaign_id),
+    );
+    const artifactKinds: Array<[keyof typeof target, string, string]> = [
+      ["request", "request", "application/json"],
+      ["native_events", "native-events", "application/x-ndjson"],
+      ["stdout", "stdout", "text/plain"],
+      ["stderr", "stderr", "text/plain"],
+      ["final_message", "final-message", "text/plain"],
+      ["workspace_patch", "workspace-patch", "text/x-diff"],
+      ["workspace_tree", "workspace-tree", "application/json"],
+      ["evaluator_result", "evaluator-result", "application/json"],
+    ];
+    const artifacts = await Promise.all(
+      artifactKinds
+        .filter(([key]) => target[key] !== undefined)
+        .map(async ([key, kind, media_type]) => {
+          const file = join(root, target[key]!);
+          const body = await readFile(file);
+          return {
+            kind,
+            path: relative(base, file).replaceAll("\\", "/"),
+            digest: `sha256:${sha256(body)}`,
+            media_type,
+            bytes: body.length,
+          };
+        }),
+    );
+    const finished = new Date();
+    const finalBytes = await workspaceBytes(workspace);
+    const result: Record<string, any> = {
+      schema_version: "0.2.0",
+      run_id: request.run_id,
+      campaign_id: request.campaign_id,
+      experiment: request.experiment,
+      suite: request.suite,
+      task: request.task,
+      configuration_id: (request.configuration as any).id,
+      repetition: request.repetition,
+      schedule_index: request.schedule_index,
+      attempt: request.attempt,
+      observed_at: finished.toISOString(),
+      started_at: startedAt.toISOString(),
+      finished_at: finished.toISOString(),
+      terminal: {
+        reason: terminal,
+        attribution: TERMINAL_ATTRIBUTION[terminal],
+        operational_success: terminal === "agent_completed",
+        exit_code: harness?.exitCode ?? null,
+        ...(harness?.signal ? { signal: harness.signal } : {}),
+      },
+      resolved_configuration: {
+        harness: (request.configuration as any).harness,
+        model: {
+          provider: (request.configuration as any).model.provider,
+          requested_id: (request.configuration as any).model.requested_id,
+          snapshot_available: false,
+        },
+        effort: (request.configuration as any).effort,
+        limits: (request.configuration as any).limits,
+        effective_config_digest: manifestDigest(request.configuration),
+      },
+      provenance: {
+        runner_version: "0.2.0",
+        runner_git_commit:
+          o.runnerGitCommit ?? process.env.RUNNER_GIT_COMMIT ?? "deadbeef",
+        runner_runtime: { name: "node", version: process.version.slice(1) },
+        request_digest: manifestDigest(request),
+        host: {
+          operating_system: process.platform,
+          architecture: process.arch,
+        },
+        execution: request.execution,
+        post_setup_tree_digest: post,
+        final_tree_digest: final,
+      },
+      metrics: {
+        timing: {
+          clock_source: "monotonic",
+          wall_time_ms: Math.round(performance.now() - started),
+          phases_ms: phases,
+        },
+        tokens:
+          harness?.tokens ??
+          unavailable(
+            "fake-harness",
+            "adapter did not expose token observations",
+          ),
+        tool_usage:
+          harness?.toolUsage ??
+          unavailable(
+            "fake-harness",
+            "adapter did not expose tool observations",
+          ),
+        cost:
+          harness?.cost ??
+          unavailable(
+            "fake-harness",
+            "adapter did not expose cost observations",
+          ),
+        resources: {
+          status: "partial",
+          source: "runner-workspace",
+          partial_reason: "adapter does not expose process counters",
+          scope: "agent-process",
+          workspace_initial_bytes: initialBytes,
+          workspace_final_bytes: finalBytes,
+          workspace_delta_bytes: finalBytes - initialBytes,
+        },
+      },
+      evaluation,
+      errors,
+      artifacts,
+      warnings: [],
+    };
+    schema?.validate("run-result", result);
+    await phase("finalization", () =>
+      atomicWrite(
+        join(root, target.run_result!),
+        redact(JSON.stringify(result), secrets),
+      ),
+    );
+    state.finalize();
+    return result;
+  }
+  async inspect(
+    root: string,
+  ): Promise<{ finalized: boolean; run?: Record<string, unknown> }> {
+    const file = join(root, "run.json");
+    return (await exists(file))
+      ? { finalized: true, run: JSON.parse(await readFile(file, "utf8")) }
+      : { finalized: false };
   }
 }
