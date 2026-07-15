@@ -16,9 +16,8 @@ added without changing task definitions.
 
 ## Current status
 
-This repository currently contains the `0.2.0-draft` framework contract,
-schemas, illustrative manifests, and a deterministic validation/CI gate. It
-does not yet contain an executable runner or released benchmark tasks.
+This repository contains the `0.2.0-draft` framework contract, schemas,
+deterministic validation/CI gate, and a provider-free deterministic runner.
 
 ## Start here
 
@@ -26,6 +25,10 @@ does not yet contain an executable runner or released benchmark tasks.
 - [spec/schemas](spec/schemas) contains JSON Schemas for manifests and results.
 - [spec/examples](spec/examples) contains non-runnable structural examples.
 - [docs/validation.md](docs/validation.md) documents the deterministic local and CI validation gate.
+- `npm run runner:fake -- request.json state/ output/ success` exercises the
+  typed request → materialize → fake harness → evaluator → immutable `run.json`
+  path without a live provider. Output directories must be fresh: finalized
+  artifacts are never overwritten.
 
 ## Core principles
 
