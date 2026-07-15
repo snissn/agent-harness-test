@@ -17,14 +17,15 @@ added without changing task definitions.
 ## Current status
 
 This repository currently contains the `0.2.0-draft` framework contract,
-schemas, and illustrative manifests. It does not yet contain an executable
-runner or released benchmark tasks.
+schemas, illustrative manifests, and a deterministic validation/CI gate. It
+does not yet contain an executable runner or released benchmark tasks.
 
 ## Start here
 
 - [SPEC.md](SPEC.md) is the normative framework specification.
 - [spec/schemas](spec/schemas) contains JSON Schemas for manifests and results.
 - [spec/examples](spec/examples) contains non-runnable structural examples.
+- [docs/validation.md](docs/validation.md) documents the deterministic local and CI validation gate.
 
 ## Core principles
 

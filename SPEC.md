@@ -710,6 +710,9 @@ Terminal attribution is recorded separately as `agent`, `provider`, `harness`,
 `not-run` status, so a broken evaluator does not erase the fact that an agent
 completed normally. The normalized result format is defined in
 [run-result.schema.json](spec/schemas/run-result.schema.json).
+`terminal.operational_success` MUST be `true` exactly when the terminal reason is
+`agent_completed`; failures, exhausted limits, infrastructure errors, and
+cancellation MUST set it to `false`.
 
 The terminal record is the final summary, not the complete error log. Every
 observed error MUST also be recorded structurally with its phase, stable code,
