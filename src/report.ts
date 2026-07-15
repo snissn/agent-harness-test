@@ -47,7 +47,7 @@ CREATE TABLE lineage (run_id TEXT, parent_run_id TEXT, attempt_mode TEXT);`);
   for (const campaignPath of campaignFiles) {
     let campaign: Json;
     try { campaign = await json(campaignPath); validator.validate("campaign", campaign, campaignPath); const experiment = experimentMetadata.get(`${campaign.experiment.id}@${campaign.experiment.version}`); if (!experiment || manifestDigest(experiment) !== campaign.experiment.spec_digest) throw new Error("campaign experiment reference/digest is invalid"); const suite = suiteMetadata.get(`${campaign.suite.id}@${campaign.suite.version}`); if (!suite || manifestDigest(suite) !== campaign.suite.spec_digest) throw new Error("campaign suite reference/digest is invalid"); }
-    catch (error) { errors.push({ source: relative(root, campaignPath), code: "invalid-campaign", message: String(error).replaceAll(root, "[REPOSITORY]") }); continue; }
+    catch (error) { errors.push({ source: portable(relative(root, campaignPath)), code: "invalid-campaign", message: String(error).replaceAll(root, "[REPOSITORY]") }); continue; }
     const campaignDir = resolve(campaignPath, "..");
     db.prepare("INSERT INTO campaigns VALUES (?, ?, ?, ?, ?)").run(`${campaign.experiment.id}@${campaign.experiment.version}:${campaign.campaign_id}`, campaign.observed_at, campaign.mode, `${campaign.suite.id}@${campaign.suite.version}`, campaign.status);
     for (const ref of campaign.runs) {
@@ -68,7 +68,7 @@ CREATE TABLE lineage (run_id TEXT, parent_run_id TEXT, attempt_mode TEXT);`);
         rows.push(row);
         db.prepare("INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(`${campaign.experiment.id}@${campaign.experiment.version}:${campaign.campaign_id}:${run.run_id}`, campaign.campaign_id, run.configuration_id, row.task, row.category, JSON.stringify(row.languages), run.attempt.number, run.attempt.mode, run.terminal.reason, run.terminal.attribution, run.terminal.operational_success === true ? 1 : 0, evaluation.eligible_for_quality_aggregate === true ? 1 : 0, metric(evaluation.artifact_quality_score), Number(evaluation.end_to_end_passed === true), timing.status ?? "unavailable", metric(timing.wall_time_ms), tokens.status ?? "unavailable", metric(tokens.total), cost.status ?? "unavailable", metric(cost.amount), resources.status ?? "unavailable");
         if (run.attempt.number > 1) db.prepare("INSERT INTO lineage VALUES (?, ?, ?)").run(run.run_id, run.attempt.parent_run_id ?? null, run.attempt.mode);
-      } catch (error) { errors.push({ source: relative(root, runPath), code: "invalid-run", message: String(error).replaceAll(root, "[REPOSITORY]") }); }
+      } catch (error) { errors.push({ source: portable(relative(root, runPath)), code: "invalid-run", message: String(error).replaceAll(root, "[REPOSITORY]") }); }
     }
   }
   for (const error of errors) db.prepare("INSERT INTO ingestion_errors VALUES (?, ?, ?)").run(error.source, error.code, error.message);
