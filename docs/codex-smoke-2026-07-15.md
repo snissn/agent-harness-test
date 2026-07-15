@@ -17,9 +17,10 @@ ignored personal configuration.
 | Configuration | Provider call | Native terminal | Evaluator score | Qualification |
 | --- | ---: | --- | ---: | --- |
 | `codex-medium` | 1 | `turn.completed` | 1.00 | completed and scored |
-| `codex-high` | 2 | missing terminal | 1.00 salvage evaluation | native stream was incomplete; not retried |
+| `codex-high` | 2 | `turn.completed` | 1.00 | completed and scored |
 
-The raw redacted workspace copies and JSONL evidence were retained during the
-local campaign under `/tmp/issue4-medium` and `/tmp/issue4-high`. Token, cost,
-and resource telemetry were not reported by the native event stream and are
-therefore unavailable rather than zero.
+Native usage reported: medium input 129756 (cached 93696), output 3463,
+reasoning output 1307; high input 150805 (cached 107776), output 3913,
+reasoning output 1983. Cost and resource telemetry were not reported and remain
+unavailable rather than zero. The raw redacted workspace copies and JSONL evidence were retained during the
+local campaign under `/tmp/issue4-medium` and `/tmp/issue4-high`.
