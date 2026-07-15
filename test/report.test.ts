@@ -46,5 +46,6 @@ test("report refuses destructive output paths", async () => {
   try {
     await assert.rejects(rebuildReport(root, "."), /disposable directory/);
     await assert.rejects(rebuildReport(root, "results"), /disposable directory/);
+    await assert.rejects(rebuildReport(root, "tasks/out"), /authoritative source roots/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

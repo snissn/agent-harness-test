@@ -26,7 +26,7 @@ export interface RebuildResult { database: string; data: string; html: string; i
 /** Rebuilds a disposable projection. Source artifacts are never modified. */
 export async function rebuildReport(rootInput: string, outputInput = "reports"): Promise<RebuildResult> {
   const root = resolve(rootInput), output = resolve(root, outputInput), results = join(root, "results");
-  if (output === root || output === results || !output.startsWith(`${root}${sep}`)) throw new Error("report output must be a disposable directory below repository root");
+  if (output === root || !output.startsWith(`${root}${sep}`) || [results, join(root, "tasks"), join(root, "spec"), join(root, "experiments")].some(source => output === source || output.startsWith(`${source}${sep}`) || source.startsWith(`${output}${sep}`))) throw new Error("report output must be a disposable directory outside authoritative source roots");
   await rm(output, { recursive: true, force: true }); await mkdir(output, { recursive: true });
   const database = join(output, "index.sqlite"), db = new DatabaseSync(database);
   db.exec(`PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;
