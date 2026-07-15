@@ -57,27 +57,32 @@ await rm(campaignRoot, { recursive: true, force: true });
 const runner = new DeterministicRunner();
 const results = [] as Record<string, any>[];
 for (const [index, configuration] of experiment.configurations.entries()) {
-  const capture = join(captures, configuration.id === "codex-medium" ? "issue4-medium" : "issue4-high");
+  const contaminated = configuration.id === "codex-high";
+  const capture = join(captures, contaminated ? "issue4-high" : "issue4-medium");
   results.push(await runner.run(request(configuration, index), {
     root, stateSource: join(root, task.problem_state.source.path), prompt,
-    adapter: new RecordedCaptureAdapter(capture),
+    adapter: new RecordedCaptureAdapter(capture, contaminated ? "native capture shows evaluator-created fixtures were read by the agent; workspace evidence is contaminated" : undefined),
     evaluator: { evaluate: async () => JSON.parse(await readFile(join(capture, "evaluator.json"), "utf8")) },
     taskChecks: task.scoring.checks, scoringPolicy: task.scoring, actualExecution: execution,
     schemaDirectory: join(root, "spec/schemas"), runnerGitCommit: process.env.RUNNER_GIT_COMMIT!,
     timing: { status: "unavailable", source: "offline-replay", unavailable_reason: "retained native JSONL has no live monotonic duration or startup-latency observations" },
+    ...(contaminated ? {
+      skipEvaluationReason: "workspace evidence contaminated by evaluator-created fixtures",
+      warnings: ["capture contamination: evaluator.json, sample.txt, and filter.txt appeared during the high run and were read by the agent"],
+    } : {}),
     runtimeRedactions: ["/private/tmp/issue4-medium", "/private/tmp/issue4-high", "/tmp/issue4-medium", "/tmp/issue4-high"],
   }));
   results[index] = JSON.parse(await readFile(join(campaignRoot, "runs", results[index]!.run_id, "run.json"), "utf8"));
 }
 const campaign = {
   schema_version: "0.2.0", campaign_id: campaignId, experiment: ref.experiment, suite: ref.suite, mode: experiment.mode,
-  observed_at: results.at(-1)!.finished_at, started_at: results[0]!.started_at, finished_at: results.at(-1)!.finished_at, status: "completed",
+  observed_at: results.at(-1)!.finished_at, started_at: results[0]!.started_at, finished_at: results.at(-1)!.finished_at, status: "partial",
   runner: { version: "0.2.0", git_commit: process.env.RUNNER_GIT_COMMIT!, runtime: results[0]!.provenance.runner_runtime },
   preflight: { started_at: "2026-07-15T08:29:00.000Z", finished_at: "2026-07-15T08:29:01.000Z", harness_runtimes: [{ harness_family: "codex", runtime_source: "npm:@openai/codex", requested_runtime: "0.145.0-alpha.11", resolved_runtime_version: "0.145.0-alpha.11", runtime_digest: runtimeDigest, executable_digest: executableDigest, acquisition: "cache-hit" }] },
   planned_run_count: 2,
   runs: results.map((run) => ({ run_id: run.run_id, path: `runs/${run.run_id}/run.json`, digest: manifestDigest(run) })),
-  summary: { recorded_runs: 2, operational_successes: 2, quality_eligible_runs: 2, end_to_end_passes: 2, invalid_runs: 0 },
-  labels: { evidence: "non-canonical-smoke", stability: "one-repetition-not-statistically-stable", finalization: "offline-replay-of-retained-captures" }, errors: [], warnings: [],
+  summary: { recorded_runs: 2, operational_successes: 1, quality_eligible_runs: 1, end_to_end_passes: 1, invalid_runs: 1 },
+  labels: { evidence: "non-canonical-smoke", stability: "one-repetition-not-statistically-stable", finalization: "offline-replay-of-retained-captures", high_capture: "environment-contaminated-not-scored" }, errors: [], warnings: ["high capture retained for provenance but excluded from scoring because evaluator-created fixtures leaked into the workspace"],
 };
 await mkdir(campaignRoot, { recursive: true });
 await writeFile(join(campaignRoot, "campaign.json"), `${JSON.stringify(campaign)}\n`);

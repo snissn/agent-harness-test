@@ -17,7 +17,10 @@ function redactLocalPaths(value: unknown): unknown {
  * discovered from the environment, network, or a Codex installation.
  */
 export class RecordedCaptureAdapter implements ControlledHarnessAdapter {
-  constructor(private readonly captureDirectory: string) {}
+  constructor(
+    private readonly captureDirectory: string,
+    private readonly contaminationReason?: string,
+  ) {}
 
   async terminate(): Promise<void> {
     // There is no child process or provider request in offline replay.
@@ -26,14 +29,12 @@ export class RecordedCaptureAdapter implements ControlledHarnessAdapter {
   async run(input: Parameters<ControlledHarnessAdapter["run"]>[0]): Promise<HarnessResult> {
     await rm(input.workspace, { recursive: true, force: true });
     await mkdir(input.workspace, { recursive: true });
-    // The retained capture mixes final workspace files with capture-control
-    // evidence. Select only the task file and the two agent-created fixtures;
-    // native JSONL, stderr, exit status, and evaluator output are evidence
-    // artifacts and must never be represented as agent workspace output.
-    for (const name of ["text_report.py", "sample.txt", "filter.txt"])
-      await cp(join(this.captureDirectory, name), join(input.workspace, name), {
-        verbatimSymlinks: true,
-      });
+    // Retained capture roots mix final workspace files with capture-control and
+    // evaluator-created files. The original task has exactly one workspace
+    // file; replaying anything else would import evaluator leakage.
+    await cp(join(this.captureDirectory, "text_report.py"), join(input.workspace, "text_report.py"), {
+      verbatimSymlinks: true,
+    });
     const events = (await readFile(join(this.captureDirectory, "native.jsonl"), "utf8"))
       .split(/\r?\n/)
       .filter(Boolean)
@@ -50,7 +51,7 @@ export class RecordedCaptureAdapter implements ControlledHarnessAdapter {
     }) as { item: { text?: unknown } } | undefined;
     const finalMessage = typeof final?.item.text === "string" ? redactLocalPaths(final.item.text) as string : undefined;
     return {
-      terminal: "agent_completed",
+      terminal: this.contaminationReason ? "environment_error" : "agent_completed",
       events,
       stderr: await readFile(join(this.captureDirectory, "stderr.txt"), "utf8"),
       ...(finalMessage === undefined ? {} : { finalMessage }),

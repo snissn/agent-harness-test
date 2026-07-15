@@ -161,7 +161,7 @@ test("M1-M3 request, fake capture, evaluation and immutable result", async () =>
     await rm(f.dir, { recursive: true, force: true });
   }
 });
-test("offline replay selects only final workspace files and redacts local event paths", async () => {
+test("offline replay excludes evaluator fixtures and redacts local event paths", async () => {
   const dir = await mkdtemp(join(tmpdir(), "aht-replay-"));
   try {
     const capture = join(dir, "capture"), workspace = join(dir, "workspace");
@@ -177,9 +177,25 @@ test("offline replay selects only final workspace files and redacts local event 
     ]);
     const result = await new RecordedCaptureAdapter(capture).run({ workspace, prompt: "", request: {}, signal: new AbortController().signal });
     assert.equal(result.finalMessage?.includes("/tmp"), false);
-    assert.deepEqual((await (await import("node:fs/promises")).readdir(workspace)).sort(), ["filter.txt", "sample.txt", "text_report.py"]);
+    assert.deepEqual(await (await import("node:fs/promises")).readdir(workspace), ["text_report.py"]);
     assert.equal((result.events![0] as any).item.text.includes("/tmp"), false);
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+test("contaminated offline captures cannot be quality eligible or scored", async () => {
+  const f = await fixture();
+  try {
+    const result = await new DeterministicRunner().run(f.request, {
+      root: f.dir, stateSource: f.state, prompt: "p",
+      adapter: { run: async () => ({ terminal: "environment_error", exitCode: 0 }) },
+      evaluator: f.evaluator, taskChecks: [{ id: "core", weight: 1, required: true }],
+      schemaDirectory: join(root, "spec/schemas"),
+      skipEvaluationReason: "workspace evidence contaminated by evaluator fixtures",
+      warnings: ["capture contamination"],
+    });
+    assert.equal(result.terminal.reason, "environment_error");
+    assert.deepEqual(result.evaluation, { status: "not-run", reason: "workspace evidence contaminated by evaluator fixtures", eligible_for_quality_aggregate: false });
+    assert.deepEqual(result.warnings, ["capture contamination"]);
+  } finally { await rm(f.dir, { recursive: true, force: true }); }
 });
 test("runner can record unavailable timing without replay milliseconds", async () => {
   const f = await fixture();
