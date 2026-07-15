@@ -34,7 +34,9 @@ references also pin the TaskSpec prompt, initial-state, and evaluator digests;
 run-request workspace fingerprints must agree with the same TaskSpec. Every run
 result is joined to its co-located `request.json` by canonical digest and shared
 run, campaign, experiment, suite, task, configuration, repetition, schedule, and
-attempt identities. Successful run results are also joined to their co-located
+attempt identities. Its resolved harness, requested model identity, effort,
+limits, and execution provenance must preserve the resolved request. Successful
+run results are also joined to their co-located
 `evaluator.json`: validation checks its manifest digest, evaluator/task identity,
 mirrored check results, scoring derivations, and end-to-end pass state. Finalized
 campaign summaries are recomputed only after every unique run reference verifies.

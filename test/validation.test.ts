@@ -398,6 +398,22 @@ test("run results require their canonical request digest and comparable identity
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-request-identity"));
 });
 
+test("run results preserve resolved configuration and execution provenance", async () => {
+  const fixture = await campaignRunFixture();
+  for (const [mutate, restore] of [
+    [() => { fixture.result.resolved_configuration.harness.runtime_version = "9.9.9"; }, () => { fixture.result.resolved_configuration.harness.runtime_version = fixture.request.configuration.harness.runtime_version; }],
+    [() => { fixture.result.resolved_configuration.effort.native_value = "different"; }, () => { fixture.result.resolved_configuration.effort.native_value = fixture.request.configuration.effort.native_value; }],
+    [() => { fixture.result.resolved_configuration.limits.wall_time_seconds.value += 1; }, () => { fixture.result.resolved_configuration.limits.wall_time_seconds.value = fixture.request.configuration.limits.wall_time_seconds.value; }],
+    [() => { fixture.result.resolved_configuration.model.requested_id = "different-model"; }, () => { fixture.result.resolved_configuration.model.requested_id = fixture.request.configuration.model.requested_id; }]
+  ] as Array<[() => void, () => void]>) {
+    mutate(); await writeFile(fixture.resultFile, JSON.stringify(fixture.result));
+    await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-configuration"));
+    restore();
+  }
+  fixture.result.provenance.execution.environment_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"; await writeFile(fixture.resultFile, JSON.stringify(fixture.result));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-execution"));
+});
+
 test("run results require a co-located canonical request", async () => {
   const fixture = await campaignRunFixture(); await unlink(fixture.requestFile);
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-request-reference"));

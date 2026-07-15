@@ -322,7 +322,7 @@ export async function validateRepository(rootInput: string): Promise<void> {
     if (!request) { diagnostics.push({ file: run.file, code: "semantic/run-request-reference", message: "run result requires a co-located request.json" }); continue; }
     const provenance = asObject(run.value.provenance);
     if (asString(provenance.request_digest) !== manifestDigest(request.value)) diagnostics.push({ file: run.file, code: "semantic/run-request-digest", message: "run result request_digest does not match request.json" });
-    const requestConfiguration = asObject(request.value.configuration);
+    const requestConfiguration = asObject(request.value.configuration), resolvedConfiguration = asObject(run.value.resolved_configuration);
     const identityMatches = asString(run.value.run_id) === asString(request.value.run_id)
       && asString(run.value.campaign_id) === asString(request.value.campaign_id)
       && manifestDigest(run.value.experiment) === manifestDigest(request.value.experiment)
@@ -333,6 +333,14 @@ export async function validateRepository(rootInput: string): Promise<void> {
       && run.value.schedule_index === request.value.schedule_index
       && manifestDigest(run.value.attempt) === manifestDigest(request.value.attempt);
     if (!identityMatches) diagnostics.push({ file: run.file, code: "semantic/run-request-identity", message: "run result identity does not match request.json" });
+    const requestModel = asObject(requestConfiguration.model), resolvedModel = asObject(resolvedConfiguration.model);
+    const configurationMatches = manifestDigest(requestConfiguration.harness) === manifestDigest(resolvedConfiguration.harness)
+      && manifestDigest(requestConfiguration.effort) === manifestDigest(resolvedConfiguration.effort)
+      && manifestDigest(requestConfiguration.limits) === manifestDigest(resolvedConfiguration.limits)
+      && asString(requestModel.provider) === asString(resolvedModel.provider)
+      && asString(requestModel.requested_id) === asString(resolvedModel.requested_id);
+    if (!configurationMatches) diagnostics.push({ file: run.file, code: "semantic/run-configuration", message: "run result resolved configuration does not match request.json" });
+    if (manifestDigest(request.value.execution) !== manifestDigest(provenance.execution)) diagnostics.push({ file: run.file, code: "semantic/run-execution", message: "run result execution provenance does not match request.json" });
   }
   for (const evaluation of repositoryManifests.filter((item) => item.kind === "evaluation")) {
     const task = taskByIdentity.get(`${asString(evaluation.value.task_id)}@${asString(evaluation.value.task_version)}`);
