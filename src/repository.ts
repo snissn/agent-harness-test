@@ -366,6 +366,16 @@ export async function validateRepository(rootInput: string): Promise<void> {
   }
   const runRequestsByFile = new Map(repositoryManifests.filter((manifest) => manifest.kind === "run-request").map((manifest) => [resolve(manifest.file), manifest]));
   for (const run of repositoryManifests.filter((manifest) => manifest.kind === "run-result")) {
+    const campaignDirectory = dirname(dirname(dirname(run.file)));
+    for (const item of run.value.artifacts as unknown[]) {
+      const artifact = asObject(item), artifactPath = asString(artifact.path);
+      try {
+        const file = await resolveSafe(campaignDirectory, artifactPath);
+        if (!await exists(file)) throw new Error(`missing run artifact: ${artifactPath}`);
+        if (!(await lstat(file)).isFile()) throw new Error(`run artifact is not a regular file: ${artifactPath}`);
+        if (`sha256:${sha256(await readFile(file))}` !== asString(artifact.digest)) throw new Error(`run artifact digest mismatch: ${artifactPath}`);
+      } catch (error) { diagnostics.push({ file: run.file, code: "semantic/run-artifact", message: error instanceof Error ? error.message : String(error) }); }
+    }
     const request = runRequestsByFile.get(resolve(dirname(run.file), "request.json"));
     if (!request) { diagnostics.push({ file: run.file, code: "semantic/run-request-reference", message: "run result requires a co-located request.json" }); continue; }
     const provenance = asObject(run.value.provenance);

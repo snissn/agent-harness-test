@@ -192,6 +192,7 @@ async function campaignRunFixture(taskNetwork?: Record<string, unknown>, expecte
   const campaign = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/campaign.example.json"), "utf8"));
   const request = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/run-request.example.json"), "utf8"));
   const result = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/run-result.example.json"), "utf8"));
+  result.artifacts = [];
   const experimentReference = { id: experiment.id, version: experiment.version, spec_path: `experiments/${experiment.id}/${experiment.version}.json`, spec_digest: manifestDigest(experiment) };
   campaign.experiment = experimentReference; campaign.suite = { ...experiment.suite }; setRunReferences(request, experiment, task); setRunReferences(result, experiment, task); setRunConfiguration(request, result, experiment); request.network = structuredClone(task.environment.network);
   request.workspace.prompt_path = task.prompt.path; request.workspace.prompt_digest = task.prompt.digest; request.workspace.initial_tree_digest = task.problem_state.expected_tree_digest;
@@ -213,6 +214,7 @@ async function runEvaluationFixture(requireAgentCompletion = true): Promise<{ ro
   const campaign = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/campaign.example.json"), "utf8"));
   const request = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/run-request.example.json"), "utf8"));
   const result = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/run-result.example.json"), "utf8"));
+  result.artifacts = [];
   const evaluation = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/evaluation.example.json"), "utf8"));
   setRunReferences(request, experiment, task); setRunReferences(result, experiment, task); setRunConfiguration(request, result, experiment); request.workspace.prompt_path = task.prompt.path; request.workspace.prompt_digest = task.prompt.digest; request.workspace.initial_tree_digest = task.problem_state.expected_tree_digest;
   evaluation.task_id = "demo"; result.evaluation.result_artifact_digest = manifestDigest(evaluation);
@@ -592,6 +594,25 @@ test("pinned model snapshots accept the exact resolved ID", async () => {
 test("unpinned model requests accept result-only snapshot resolution", async () => {
   const fixture = await campaignRunFixture(); fixture.result.resolved_configuration.model.snapshot_available = true; fixture.result.resolved_configuration.model.resolved_id = "gpt-5.6-sol-2026-07-14"; fixture.campaign.runs[0].digest = manifestDigest(fixture.result);
   await writeFile(fixture.resultFile, JSON.stringify(fixture.result)); await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign)); await validateRepository(fixture.root);
+});
+
+test("run artifacts verify valid referenced bytes", async () => {
+  const fixture = await campaignRunFixture(); const bytes = "captured output\n"; const path = `runs/${fixture.result.run_id}/stdout.log`; await writeFile(join(fixture.root, "results", fixture.result.experiment.id, fixture.result.campaign_id, path), bytes);
+  fixture.result.artifacts = [{ kind: "stdout", path, digest: `sha256:${sha256(bytes)}` }]; fixture.campaign.runs[0].digest = manifestDigest(fixture.result);
+  await writeFile(fixture.resultFile, JSON.stringify(fixture.result)); await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign)); await validateRepository(fixture.root);
+});
+
+test("run artifacts reject missing referenced files", async () => {
+  const fixture = await campaignRunFixture(); const path = `runs/${fixture.result.run_id}/missing.log`; fixture.result.artifacts = [{ kind: "stdout", path, digest: `sha256:${sha256("missing")}` }]; fixture.campaign.runs[0].digest = manifestDigest(fixture.result);
+  await writeFile(fixture.resultFile, JSON.stringify(fixture.result)); await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-artifact" && item.message.includes("missing run artifact")));
+});
+
+test("run artifacts reject stale digests", async () => {
+  const fixture = await campaignRunFixture(); const path = `runs/${fixture.result.run_id}/stdout.log`; await writeFile(join(fixture.root, "results", fixture.result.experiment.id, fixture.result.campaign_id, path), "current bytes\n");
+  fixture.result.artifacts = [{ kind: "stdout", path, digest: `sha256:${sha256("stale bytes\n")}` }]; fixture.campaign.runs[0].digest = manifestDigest(fixture.result);
+  await writeFile(fixture.resultFile, JSON.stringify(fixture.result)); await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-artifact" && item.message.includes("run artifact digest mismatch")));
 });
 
 test("run results require a co-located canonical request", async () => {

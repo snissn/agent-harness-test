@@ -45,7 +45,9 @@ attempt identities. Its resolved harness, requested model identity, effort,
 limits, and execution provenance must preserve the resolved request. When the
 request pins `expected_snapshot_id`, the result must report an available snapshot
 with that exact resolved ID; unpinned requests may retain result-only snapshot
-resolution metadata. Successful
+resolution metadata. Every listed run artifact must resolve to a regular,
+non-symlink file beneath the campaign directory and match its declared raw-byte
+SHA-256 digest. Successful
 run results are also joined to their co-located
 `evaluator.json`: validation checks its manifest digest, evaluator/task identity,
 mirrored check results, scoring derivations, and end-to-end pass state. Only
