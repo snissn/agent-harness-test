@@ -575,6 +575,8 @@ export interface RunOptions {
   timer?: Timer;
   runtimeRedactions?: string[];
   runnerGitCommit?: string;
+  /** Explicitly substitute timing when replay cannot observe live execution. */
+  timing?: Record<string, unknown>;
 }
 export function deriveDiagnosticAttempt(
   parentRequest: Record<string, any>,
@@ -1027,7 +1029,9 @@ export class DeterministicRunner {
         final_tree_digest: final,
       },
       metrics: {
-        timing: {
+        timing: o.timing ?? {
+          status: "complete",
+          source: "runner-monotonic",
           clock_source: "monotonic",
           wall_time_ms: Math.round(performance.now() - started),
           phases_ms: phases,

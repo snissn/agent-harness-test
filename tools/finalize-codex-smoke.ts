@@ -64,6 +64,7 @@ for (const [index, configuration] of experiment.configurations.entries()) {
     evaluator: { evaluate: async () => JSON.parse(await readFile(join(capture, "evaluator.json"), "utf8")) },
     taskChecks: task.scoring.checks, scoringPolicy: task.scoring, actualExecution: execution,
     schemaDirectory: join(root, "spec/schemas"), runnerGitCommit: process.env.RUNNER_GIT_COMMIT!,
+    timing: { status: "unavailable", source: "offline-replay", unavailable_reason: "retained native JSONL has no live monotonic duration or startup-latency observations" },
     runtimeRedactions: ["/private/tmp/issue4-medium", "/private/tmp/issue4-high", "/tmp/issue4-medium", "/tmp/issue4-high"],
   }));
   results[index] = JSON.parse(await readFile(join(campaignRoot, "runs", results[index]!.run_id, "run.json"), "utf8"));

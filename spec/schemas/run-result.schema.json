@@ -342,12 +342,23 @@
     "timingMetrics": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "clock_source",
-        "wall_time_ms",
-        "phases_ms"
-      ],
+      "required": [],
       "properties": {
+        "status": {
+          "enum": ["complete", "partial", "unavailable"]
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "unavailable_reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "partial_reason": {
+          "type": "string",
+          "minLength": 1
+        },
         "clock_source": {
           "const": "monotonic"
         },
@@ -401,7 +412,21 @@
           "type": "integer",
           "minimum": 0
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "complete" } }, "required": ["status"] },
+          "then": { "properties": { "source": true, "unavailable_reason": false, "partial_reason": false, "clock_source": true, "wall_time_ms": true, "phases_ms": true }, "required": ["source", "clock_source", "wall_time_ms", "phases_ms"] }
+        },
+        {
+          "if": { "properties": { "status": { "const": "partial" } }, "required": ["status"] },
+          "then": { "properties": { "source": true, "unavailable_reason": false, "partial_reason": true }, "required": ["source", "partial_reason"] }
+        },
+        {
+          "if": { "properties": { "status": { "const": "unavailable" } }, "required": ["status"] },
+          "then": { "properties": { "source": true, "partial_reason": false, "clock_source": false, "wall_time_ms": false, "phases_ms": false, "time_to_first_harness_event_ms": false, "time_to_first_agent_output_ms": false, "time_to_first_tool_call_ms": false, "unavailable_reason": true }, "required": ["source", "unavailable_reason"] }
+        }
+      ]
     },
     "tokenUsage": {
       "type": "object",
