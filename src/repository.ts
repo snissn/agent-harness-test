@@ -386,7 +386,9 @@ export async function validateRepository(rootInput: string): Promise<void> {
       && manifestDigest(requestConfiguration.effort) === manifestDigest(resolvedConfiguration.effort)
       && manifestDigest(requestConfiguration.limits) === manifestDigest(resolvedConfiguration.limits)
       && asString(requestModel.provider) === asString(resolvedModel.provider)
-      && asString(requestModel.requested_id) === asString(resolvedModel.requested_id);
+      && asString(requestModel.requested_id) === asString(resolvedModel.requested_id)
+      && (requestModel.expected_snapshot_id === undefined
+        || (resolvedModel.snapshot_available === true && resolvedModel.resolved_id === requestModel.expected_snapshot_id));
     if (!configurationMatches) diagnostics.push({ file: run.file, code: "semantic/run-configuration", message: "run result resolved configuration does not match request.json" });
     if (manifestDigest(request.value.execution) !== manifestDigest(provenance.execution)) diagnostics.push({ file: run.file, code: "semantic/run-execution", message: "run result execution provenance does not match request.json" });
   }

@@ -184,10 +184,11 @@ async function addAlternateSuite(fixture: { root: string; request: Record<string
   await mkdir(join(fixture.root, "suites/alternate"), { recursive: true }); await writeFile(join(fixture.root, "suites/alternate/1.0.0.json"), JSON.stringify(suite)); return suite;
 }
 
-async function campaignRunFixture(taskNetwork?: Record<string, unknown>): Promise<{ root: string; experiment: Record<string, any>; experimentFile: string; campaign: Record<string, any>; campaignFile: string; request: Record<string, any>; requestFile: string; result: Record<string, any>; resultFile: string }> {
+async function campaignRunFixture(taskNetwork?: Record<string, unknown>, expectedSnapshotId?: string): Promise<{ root: string; experiment: Record<string, any>; experimentFile: string; campaign: Record<string, any>; campaignFile: string; request: Record<string, any>; requestFile: string; result: Record<string, any>; resultFile: string }> {
   const fixture = await semanticFixture(); const task = fixture.task as Record<string, any>;
   if (taskNetwork) { task.environment.network = structuredClone(taskNetwork); await writeFile(fixture.taskFile, JSON.stringify(task)); }
   const { experiment, file: experimentFile } = await addValidExperiment(fixture);
+  if (expectedSnapshotId) { experiment.configurations[0].model.expected_snapshot_id = expectedSnapshotId; await writeFile(experimentFile, JSON.stringify(experiment)); }
   const campaign = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/campaign.example.json"), "utf8"));
   const request = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/run-request.example.json"), "utf8"));
   const result = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/run-result.example.json"), "utf8"));
@@ -570,6 +571,27 @@ test("run results preserve resolved configuration and execution provenance", asy
   }
   fixture.result.provenance.execution.environment_digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"; await writeFile(fixture.resultFile, JSON.stringify(fixture.result));
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-execution"));
+});
+
+test("pinned model snapshots reject unavailable resolution", async () => {
+  const fixture = await campaignRunFixture(undefined, "gpt-5.6-sol-2026-07-14");
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-configuration"));
+});
+
+test("pinned model snapshots reject a different resolved ID", async () => {
+  const fixture = await campaignRunFixture(undefined, "gpt-5.6-sol-2026-07-14"); fixture.result.resolved_configuration.model.snapshot_available = true; fixture.result.resolved_configuration.model.resolved_id = "gpt-5.6-sol-2026-07-13"; fixture.campaign.runs[0].digest = manifestDigest(fixture.result);
+  await writeFile(fixture.resultFile, JSON.stringify(fixture.result)); await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-configuration"));
+});
+
+test("pinned model snapshots accept the exact resolved ID", async () => {
+  const expected = "gpt-5.6-sol-2026-07-14"; const fixture = await campaignRunFixture(undefined, expected); fixture.result.resolved_configuration.model.snapshot_available = true; fixture.result.resolved_configuration.model.resolved_id = expected; fixture.campaign.runs[0].digest = manifestDigest(fixture.result);
+  await writeFile(fixture.resultFile, JSON.stringify(fixture.result)); await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign)); await validateRepository(fixture.root);
+});
+
+test("unpinned model requests accept result-only snapshot resolution", async () => {
+  const fixture = await campaignRunFixture(); fixture.result.resolved_configuration.model.snapshot_available = true; fixture.result.resolved_configuration.model.resolved_id = "gpt-5.6-sol-2026-07-14"; fixture.campaign.runs[0].digest = manifestDigest(fixture.result);
+  await writeFile(fixture.resultFile, JSON.stringify(fixture.result)); await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign)); await validateRepository(fixture.root);
 });
 
 test("run results require a co-located canonical request", async () => {

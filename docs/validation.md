@@ -42,7 +42,10 @@ exactly equal one experiment-declared configuration. Every run
 result is joined to its co-located `request.json` by canonical digest and shared
 run, campaign, experiment, suite, task, configuration, repetition, schedule, and
 attempt identities. Its resolved harness, requested model identity, effort,
-limits, and execution provenance must preserve the resolved request. Successful
+limits, and execution provenance must preserve the resolved request. When the
+request pins `expected_snapshot_id`, the result must report an available snapshot
+with that exact resolved ID; unpinned requests may retain result-only snapshot
+resolution metadata. Successful
 run results are also joined to their co-located
 `evaluator.json`: validation checks its manifest digest, evaluator/task identity,
 mirrored check results, scoring derivations, and end-to-end pass state. Only
