@@ -1,7 +1,8 @@
 # Validation and CI
 
-Node `24.12.0` and npm `11.7.0` are pinned by `package.json` and the committed
-lockfile. From a fresh checkout, run:
+CI pins Node `24.12.0` in `.github/workflows/validation.yml`. `package.json`
+declares npm `11.7.0` through `packageManager`, while `engines` constrains local
+installs to Node 24 and npm 11. From a fresh checkout, run:
 
 ```sh
 npm ci
@@ -48,7 +49,8 @@ campaign summaries are recomputed only after every unique run reference verifies
 `recorded_runs` counts referenced results, `operational_successes` counts true
 `terminal.operational_success` values, and the quality-eligible and end-to-end
 counters use their corresponding run evaluation booleans. Quality eligibility is
-verified from evaluation status and the terminal failure taxonomy. Per SPEC section
+verified from attempt lineage, evaluation status, and the terminal failure taxonomy;
+operator-initiated retries and resumes are diagnostic and ineligible. Per SPEC section
 11.2, `invalid_runs` narrowly counts results excluded from the quality denominator
 (`eligible_for_quality_aggregate = false`); it is not inferred from planned run
 counts or campaign status. This command deliberately does not run agents or

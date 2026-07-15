@@ -50,7 +50,7 @@ test("strict schemas reject unknown fields and incompatible versions", async () 
   assert.throws(() => validator.validate("task", { ...valid, schema_version: "1.0.0" }, "bad.json"), ValidationError);
   const suite = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/suite.example.json"), "utf8")); suite.tasks[0].spec_path = "tasks\\example-cli\\1.0.0\\task.yaml";
   assert.throws(() => validator.validate("suite", suite, "bad-suite.json"), ValidationError);
-  for (const path of ["C:/tasks/example/task.yaml", "tasks/example/\u0000/task.yaml"]) { suite.tasks[0].spec_path = path; assert.throws(() => validator.validate("suite", suite, "bad-suite.json"), ValidationError); }
+  for (const path of ["C:/tasks/example/task.yaml", "tasks/example/\u0000/task.yaml", "tasks/example/"]) { suite.tasks[0].spec_path = path; assert.throws(() => validator.validate("suite", suite, "bad-suite.json"), ValidationError); }
 });
 
 test("repository paths and schemas enforce strict SemVer identifiers", async () => {
@@ -108,7 +108,7 @@ test("tree-sha256-v1 rejects a normalized-path collision when the filesystem per
 });
 
 test("repository paths fail closed for escapes and collisions", () => {
-  for (const path of ["../escape", "/absolute", "C:/absolute", "a//b", "a/../b", "a\\b", "a/\0/b"]) assert.equal(safeRelativePath(path), false);
+  for (const path of ["../escape", "/absolute", "C:/absolute", "a//b", "a/../b", "a/", "a\\b", "a/\0/b"]) assert.equal(safeRelativePath(path), false);
   assert.equal(safeRelativePath("tasks/example/1.0.0/task.yaml"), true);
 });
 
@@ -598,6 +598,17 @@ test("run quality eligibility follows evaluation and terminal failure taxonomy",
   const providerFailure = await runEvaluationFixture(); providerFailure.result.terminal = { reason: "provider_error", attribution: "provider", operational_success: false }; await writeFile(providerFailure.resultFile, JSON.stringify(providerFailure.result));
   await assert.rejects(validateRepository(providerFailure.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-quality-eligibility" && item.message.includes("must be false")));
   providerFailure.result.evaluation.eligible_for_quality_aggregate = false; await writeFile(providerFailure.resultFile, JSON.stringify(providerFailure.result)); await validateRepository(providerFailure.root);
+});
+
+test("operator retries and resumes are excluded from headline quality aggregates", async () => {
+  for (const mode of ["retry", "resume"]) {
+    const fixture = await runEvaluationFixture();
+    const attempt = { number: 2, mode, initiated_by: "operator", parent_run_id: "01J00000000000000000000001", reason: `operator ${mode}` };
+    fixture.request.attempt = structuredClone(attempt); fixture.result.attempt = structuredClone(attempt); fixture.result.provenance.request_digest = manifestDigest(fixture.request);
+    await writeFile(fixture.requestFile, JSON.stringify(fixture.request)); await writeFile(fixture.resultFile, JSON.stringify(fixture.result));
+    await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-quality-eligibility" && item.message.includes("must be false")));
+    fixture.result.evaluation.eligible_for_quality_aggregate = false; await writeFile(fixture.resultFile, JSON.stringify(fixture.result)); await validateRepository(fixture.root);
+  }
 });
 
 test("successful run evaluations require their co-located evaluator artifact", async () => {

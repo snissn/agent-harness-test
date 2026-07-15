@@ -400,8 +400,9 @@ export async function validateRepository(rootInput: string): Promise<void> {
   for (const run of repositoryManifests.filter((manifest) => manifest.kind === "run-result")) {
     const summary = asObject(run.value.evaluation), summaryStatus = asString(summary.status);
     const terminal = asObject(run.value.terminal), terminalReason = asString(terminal.reason);
-    const qualityEligible = summaryStatus === "ok" && (scorableFailureReasons.has(terminalReason) || (terminalReason === "agent_completed" && terminal.attribution === "agent"));
-    if (summary.eligible_for_quality_aggregate !== qualityEligible) diagnostics.push({ file: run.file, code: "semantic/run-quality-eligibility", message: `eligible_for_quality_aggregate must be ${qualityEligible} for evaluation status ${summaryStatus} and terminal reason ${terminalReason}` });
+    const attempt = asObject(run.value.attempt), diagnosticAttempt = attempt.initiated_by === "operator" && (attempt.mode === "retry" || attempt.mode === "resume");
+    const qualityEligible = !diagnosticAttempt && summaryStatus === "ok" && (scorableFailureReasons.has(terminalReason) || (terminalReason === "agent_completed" && terminal.attribution === "agent"));
+    if (summary.eligible_for_quality_aggregate !== qualityEligible) diagnostics.push({ file: run.file, code: "semantic/run-quality-eligibility", message: `eligible_for_quality_aggregate must be ${qualityEligible} for ${asString(attempt.mode)} attempt, evaluation status ${summaryStatus}, and terminal reason ${terminalReason}` });
     const evaluation = evaluationsByFile.get(resolve(dirname(run.file), "evaluator.json"));
     if (!evaluation) {
       if (summaryStatus === "ok") diagnostics.push({ file: run.file, code: "semantic/run-evaluation-reference", message: "successful run evaluation requires a co-located evaluator.json" });
