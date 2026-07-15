@@ -296,15 +296,24 @@ export async function validateRepository(rootInput: string): Promise<void> {
     } catch (error) { diagnostics.push({ file: owner.file, code: "semantic/task-fingerprint", message: error instanceof Error ? error.message : String(error) }); }
   }
   for (const campaign of repositoryManifests.filter((manifest) => manifest.kind === "campaign")) {
-    validateSpecReference(campaign, asObject(campaign.value.experiment), "experiment", experimentByIdentity);
-    validateSpecReference(campaign, asObject(campaign.value.suite), "suite", suiteByIdentity);
+    const experimentReference = asObject(campaign.value.experiment), suiteReference = asObject(campaign.value.suite);
+    const experiment = validateSpecReference(campaign, experimentReference, "experiment", experimentByIdentity);
+    const suite = validateSpecReference(campaign, suiteReference, "suite", suiteByIdentity);
+    if (experiment && suite && manifestDigest(suiteReference) !== manifestDigest(experiment.value.suite)) diagnostics.push({ file: campaign.file, code: "semantic/experiment-suite", message: "campaign suite does not match the experiment's pinned suite" });
   }
   for (const manifest of repositoryManifests.filter((item) => item.kind === "run-request" || item.kind === "run-result")) {
-    validateSpecReference(manifest, asObject(manifest.value.experiment), "experiment", experimentByIdentity);
-    validateSpecReference(manifest, asObject(manifest.value.suite), "suite", suiteByIdentity);
+    const experimentReference = asObject(manifest.value.experiment), suiteReference = asObject(manifest.value.suite);
+    const experiment = validateSpecReference(manifest, experimentReference, "experiment", experimentByIdentity);
+    const suite = validateSpecReference(manifest, suiteReference, "suite", suiteByIdentity);
+    if (experiment && suite && manifestDigest(suiteReference) !== manifestDigest(experiment.value.suite)) diagnostics.push({ file: manifest.file, code: "semantic/experiment-suite", message: "run suite does not match the experiment's pinned suite" });
     const taskReference = asObject(manifest.value.task), task = validateSpecReference(manifest, taskReference, "task", taskByIdentity);
     if (task) {
       validateTaskFingerprints(manifest, taskReference, task);
+      if (suite && !(suite.value.tasks as unknown[]).some((item) => { const reference = asObject(item); return reference.id === taskReference.id && reference.version === taskReference.version; })) diagnostics.push({ file: manifest.file, code: "semantic/run-task-suite", message: `run task ${asString(taskReference.id)}@${asString(taskReference.version)} is not present in its suite` });
+      if (experiment && experiment.value.task_selection !== undefined) {
+        const selection = asObject(experiment.value.task_selection), taskId = asString(taskReference.id);
+        if ((Array.isArray(selection.include) && !selection.include.includes(taskId)) || (Array.isArray(selection.exclude) && selection.exclude.includes(taskId))) diagnostics.push({ file: manifest.file, code: "semantic/run-task-selection", message: `run task ${taskId} is not selected by experiment task_selection` });
+      }
       if (manifest.kind === "run-request") {
         try {
           const workspace = asObject(manifest.value.workspace), prompt = asObject(task.value.prompt), state = asObject(task.value.problem_state);
@@ -314,6 +323,10 @@ export async function validateRepository(rootInput: string): Promise<void> {
           if (!workspaceMatches) diagnostics.push({ file: manifest.file, code: "semantic/workspace-fingerprint", message: "run request workspace fingerprints do not match TaskSpec" });
         } catch (error) { diagnostics.push({ file: manifest.file, code: "semantic/workspace-fingerprint", message: error instanceof Error ? error.message : String(error) }); }
       }
+    }
+    if (manifest.kind === "run-request" && experiment) {
+      const configuration = asObject(manifest.value.configuration), declared = (experiment.value.configurations as unknown[]).find((item) => asObject(item).id === configuration.id);
+      if (!declared || manifestDigest(declared) !== manifestDigest(configuration)) diagnostics.push({ file: manifest.file, code: "semantic/run-configuration-reference", message: `run configuration ${asString(configuration.id)} does not exactly match its experiment declaration` });
     }
   }
   const runRequestsByFile = new Map(repositoryManifests.filter((manifest) => manifest.kind === "run-request").map((manifest) => [resolve(manifest.file), manifest]));

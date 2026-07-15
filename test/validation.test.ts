@@ -84,14 +84,18 @@ test("repository paths fail closed for escapes and collisions", () => {
   assert.equal(safeRelativePath("tasks/example/1.0.0/task.yaml"), true);
 });
 
-async function semanticFixture(taskId = "demo"): Promise<{ root: string; taskFile: string; task: Record<string, unknown> }> {
-  const fixture = await mkdtemp(join(tmpdir(), "aht-repo-"));
-  await cp(join(root, "spec/schemas"), join(fixture, "spec/schemas"), { recursive: true }); await mkdir(join(fixture, "spec/examples"), { recursive: true });
+async function addValidTask(fixture: string, taskId: string): Promise<{ taskFile: string; task: Record<string, unknown> }> {
   const taskRoot = `tasks/${taskId}/1.0.0`; const taskFile = join(fixture, taskRoot, "task.json"); await mkdir(join(fixture, taskRoot, "state"), { recursive: true }); await mkdir(join(fixture, taskRoot, "evaluator"), { recursive: true });
   await writeFile(join(fixture, taskRoot, "prompt.md"), "prompt bytes\n"); await writeFile(join(fixture, taskRoot, "state/file.txt"), "state"); await mkdir(join(fixture, taskRoot, "state/suites")); await writeFile(join(fixture, taskRoot, "state/task.json"), "not a manifest"); await writeFile(join(fixture, taskRoot, "state/suites/my-suite.yaml"), "not: a framework suite"); await writeFile(join(fixture, taskRoot, "evaluator/evaluate.py"), "evaluator"); await writeFile(join(fixture, taskRoot, "evaluator/evaluator.json"), "not an evaluation artifact");
   const source = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/task.example.json"), "utf8")) as Record<string, any>;
   source.id = taskId; source.status = "candidate"; source.prompt.path = `${taskRoot}/prompt.md`; source.prompt.digest = `sha256:${sha256("prompt bytes\n")}`; source.problem_state.source.path = `${taskRoot}/state`; source.problem_state.expected_tree_digest = await treeDigest(join(fixture, taskRoot, "state")); source.evaluator.path = `${taskRoot}/evaluator`; source.evaluator.digest = await treeDigest(join(fixture, taskRoot, "evaluator"));
-  await writeFile(taskFile, JSON.stringify(source)); return { root: fixture, taskFile, task: source };
+  await writeFile(taskFile, JSON.stringify(source)); return { taskFile, task: source };
+}
+
+async function semanticFixture(taskId = "demo"): Promise<{ root: string; taskFile: string; task: Record<string, unknown> }> {
+  const fixture = await mkdtemp(join(tmpdir(), "aht-repo-"));
+  await cp(join(root, "spec/schemas"), join(fixture, "spec/schemas"), { recursive: true }); await mkdir(join(fixture, "spec/examples"), { recursive: true });
+  return { root: fixture, ...await addValidTask(fixture, taskId) };
 }
 
 function setCalibration(task: Record<string, any>, status: "draft" | "released" | "retired", evidenceDigest: string): void {
@@ -131,13 +135,25 @@ function setRunReferences(manifest: Record<string, any>, experiment: Record<stri
   manifest.task = { id: task.id, version: task.version, spec_path: `tasks/${task.id}/${task.version}/task.json`, spec_digest: manifestDigest(task), prompt_digest: task.prompt.digest, initial_tree_digest: task.problem_state.expected_tree_digest, evaluator_digest: task.evaluator.digest };
 }
 
-async function campaignRunFixture(): Promise<{ root: string; campaign: Record<string, any>; campaignFile: string; request: Record<string, any>; requestFile: string; result: Record<string, any>; resultFile: string }> {
-  const fixture = await semanticFixture(); const task = fixture.task as Record<string, any>; const { experiment } = await addValidExperiment(fixture);
+function setRunConfiguration(request: Record<string, any>, result: Record<string, any>, experiment: Record<string, any>): void {
+  const configuration = structuredClone(experiment.configurations[0]); request.configuration = configuration; result.configuration_id = configuration.id;
+  result.resolved_configuration.harness = structuredClone(configuration.harness); result.resolved_configuration.effort = structuredClone(configuration.effort); result.resolved_configuration.limits = structuredClone(configuration.limits);
+  result.resolved_configuration.model.provider = configuration.model.provider; result.resolved_configuration.model.requested_id = configuration.model.requested_id;
+}
+
+async function addAlternateSuite(fixture: { root: string; request: Record<string, any> }): Promise<Record<string, any>> {
+  const suite = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/suite.example.json"), "utf8")); suite.id = "alternate"; suite.status = "draft";
+  suite.tasks[0] = { id: fixture.request.task.id, version: fixture.request.task.version, spec_path: fixture.request.task.spec_path, spec_digest: fixture.request.task.spec_digest, weight: 1, anchor: true };
+  await mkdir(join(fixture.root, "suites/alternate"), { recursive: true }); await writeFile(join(fixture.root, "suites/alternate/1.0.0.json"), JSON.stringify(suite)); return suite;
+}
+
+async function campaignRunFixture(): Promise<{ root: string; experiment: Record<string, any>; experimentFile: string; campaign: Record<string, any>; campaignFile: string; request: Record<string, any>; requestFile: string; result: Record<string, any>; resultFile: string }> {
+  const fixture = await semanticFixture(); const task = fixture.task as Record<string, any>; const { experiment, file: experimentFile } = await addValidExperiment(fixture);
   const campaign = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/campaign.example.json"), "utf8"));
   const request = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/run-request.example.json"), "utf8"));
   const result = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/run-result.example.json"), "utf8"));
   const experimentReference = { id: experiment.id, version: experiment.version, spec_path: `experiments/${experiment.id}/${experiment.version}.json`, spec_digest: manifestDigest(experiment) };
-  campaign.experiment = experimentReference; campaign.suite = { ...experiment.suite }; setRunReferences(request, experiment, task); setRunReferences(result, experiment, task);
+  campaign.experiment = experimentReference; campaign.suite = { ...experiment.suite }; setRunReferences(request, experiment, task); setRunReferences(result, experiment, task); setRunConfiguration(request, result, experiment);
   request.workspace.prompt_path = task.prompt.path; request.workspace.prompt_digest = task.prompt.digest; request.workspace.initial_tree_digest = task.problem_state.expected_tree_digest;
   result.evaluation = { status: "not-run", reason: "campaign reference fixture", eligible_for_quality_aggregate: false };
   result.provenance.request_digest = manifestDigest(request);
@@ -147,7 +163,7 @@ async function campaignRunFixture(): Promise<{ root: string; campaign: Record<st
   campaign.runs = [{ run_id: result.run_id, path: `runs/${result.run_id}/run.json`, digest: manifestDigest(result) }];
   campaign.summary = { recorded_runs: 1, operational_successes: 1, quality_eligible_runs: 0, end_to_end_passes: 0, invalid_runs: 1 };
   await writeFile(campaignFile, JSON.stringify(campaign)); await writeFile(requestFile, JSON.stringify(request)); await writeFile(resultFile, JSON.stringify(result));
-  return { root: fixture.root, campaign, campaignFile, request, requestFile, result, resultFile };
+  return { root: fixture.root, experiment, experimentFile, campaign, campaignFile, request, requestFile, result, resultFile };
 }
 
 async function runEvaluationFixture(): Promise<{ root: string; request: Record<string, any>; requestFile: string; result: Record<string, any>; resultFile: string; evaluation: Record<string, any>; evaluationFile: string }> {
@@ -155,7 +171,7 @@ async function runEvaluationFixture(): Promise<{ root: string; request: Record<s
   const request = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/run-request.example.json"), "utf8"));
   const result = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/run-result.example.json"), "utf8"));
   const evaluation = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/evaluation.example.json"), "utf8"));
-  setRunReferences(request, experiment, task); setRunReferences(result, experiment, task); request.workspace.prompt_path = task.prompt.path; request.workspace.prompt_digest = task.prompt.digest; request.workspace.initial_tree_digest = task.problem_state.expected_tree_digest;
+  setRunReferences(request, experiment, task); setRunReferences(result, experiment, task); setRunConfiguration(request, result, experiment); request.workspace.prompt_path = task.prompt.path; request.workspace.prompt_digest = task.prompt.digest; request.workspace.initial_tree_digest = task.problem_state.expected_tree_digest;
   evaluation.task_id = "demo"; result.evaluation.result_artifact_digest = manifestDigest(evaluation);
   result.provenance.request_digest = manifestDigest(request);
   const runDirectory = join(fixture.root, "results", result.experiment.id, result.campaign_id, "runs", result.run_id); await mkdir(runDirectory, { recursive: true });
@@ -384,6 +400,35 @@ test("run request and result references resolve exact specs and task fingerprint
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.file.endsWith("/run.json") && item.code === "semantic/task-fingerprint"));
   fixture.result.task.prompt_digest = fixture.request.task.prompt_digest; fixture.request.experiment.id = "missing-experiment"; fixture.result.provenance.request_digest = manifestDigest(fixture.request); await writeFile(fixture.requestFile, JSON.stringify(fixture.request)); await writeFile(fixture.resultFile, JSON.stringify(fixture.result));
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/experiment-reference"));
+});
+
+test("campaign and run suites match their resolved experiment", async () => {
+  const fixture = await campaignRunFixture(); const alternate = await addAlternateSuite(fixture);
+  const reference = { id: alternate.id, version: alternate.version, spec_path: "suites/alternate/1.0.0.json", spec_digest: manifestDigest(alternate) };
+  fixture.campaign.suite = reference; await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.file.endsWith("/campaign.json") && item.code === "semantic/experiment-suite"));
+  fixture.campaign.suite = { ...fixture.experiment.suite }; fixture.request.suite = reference; fixture.result.provenance.request_digest = manifestDigest(fixture.request); await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign)); await writeFile(fixture.requestFile, JSON.stringify(fixture.request)); await writeFile(fixture.resultFile, JSON.stringify(fixture.result));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.file.endsWith("/request.json") && item.code === "semantic/experiment-suite"));
+  fixture.request.suite = { ...fixture.experiment.suite }; fixture.result.suite = reference; fixture.result.provenance.request_digest = manifestDigest(fixture.request); await writeFile(fixture.requestFile, JSON.stringify(fixture.request)); await writeFile(fixture.resultFile, JSON.stringify(fixture.result));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.file.endsWith("/run.json") && item.code === "semantic/experiment-suite"));
+});
+
+test("run tasks belong to their suite and satisfy experiment selection", async () => {
+  const fixture = await campaignRunFixture(); const other = (await addValidTask(fixture.root, "other")).task as Record<string, any>;
+  setRunReferences(fixture.request, fixture.experiment, other); setRunReferences(fixture.result, fixture.experiment, other); fixture.request.workspace.prompt_path = other.prompt.path; fixture.request.workspace.prompt_digest = other.prompt.digest; fixture.request.workspace.initial_tree_digest = other.problem_state.expected_tree_digest; fixture.result.provenance.request_digest = manifestDigest(fixture.request); fixture.campaign.runs[0].digest = manifestDigest(fixture.result);
+  await writeFile(fixture.requestFile, JSON.stringify(fixture.request)); await writeFile(fixture.resultFile, JSON.stringify(fixture.result)); await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.filter((item) => item.code === "semantic/run-task-suite").length === 2);
+  const selected = await campaignRunFixture(); selected.experiment.task_selection = { exclude: [selected.request.task.id] }; await writeFile(selected.experimentFile, JSON.stringify(selected.experiment));
+  const experimentDigest = manifestDigest(selected.experiment); for (const manifest of [selected.campaign, selected.request, selected.result]) manifest.experiment.spec_digest = experimentDigest;
+  selected.result.provenance.request_digest = manifestDigest(selected.request); selected.campaign.runs[0].digest = manifestDigest(selected.result); await writeFile(selected.campaignFile, JSON.stringify(selected.campaign)); await writeFile(selected.requestFile, JSON.stringify(selected.request)); await writeFile(selected.resultFile, JSON.stringify(selected.result));
+  await assert.rejects(validateRepository(selected.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.filter((item) => item.code === "semantic/run-task-selection").length === 2);
+});
+
+test("run request configurations exactly match an experiment declaration", async () => {
+  const undeclared = await campaignRunFixture(); undeclared.request.configuration.id = "missing-configuration"; undeclared.result.configuration_id = "missing-configuration"; undeclared.result.provenance.request_digest = manifestDigest(undeclared.request); undeclared.campaign.runs[0].digest = manifestDigest(undeclared.result); await writeFile(undeclared.requestFile, JSON.stringify(undeclared.request)); await writeFile(undeclared.resultFile, JSON.stringify(undeclared.result)); await writeFile(undeclared.campaignFile, JSON.stringify(undeclared.campaign));
+  await assert.rejects(validateRepository(undeclared.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-configuration-reference"));
+  const drifted = await campaignRunFixture(); drifted.request.configuration.harness.runtime_version = "9.9.9"; drifted.result.resolved_configuration.harness.runtime_version = "9.9.9"; drifted.result.provenance.request_digest = manifestDigest(drifted.request); drifted.campaign.runs[0].digest = manifestDigest(drifted.result); await writeFile(drifted.requestFile, JSON.stringify(drifted.request)); await writeFile(drifted.resultFile, JSON.stringify(drifted.result)); await writeFile(drifted.campaignFile, JSON.stringify(drifted.campaign));
+  await assert.rejects(validateRepository(drifted.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-configuration-reference"));
 });
 
 test("run request workspace fingerprints resolve against its task spec", async () => {
