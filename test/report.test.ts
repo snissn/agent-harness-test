@@ -20,7 +20,9 @@ test("report rebuild is deterministic and keeps infrastructure failures out of q
     const second = await rebuildReport(root, "report-b"), secondData = await readFile(second.data, "utf8");
     assert.equal(firstData, secondData);
     const data = JSON.parse(firstData);
-    assert.match(await readFile(first.html, "utf8"), /Smoke evidence/);
+    const html = await readFile(first.html, "utf8");
+    for (const heading of ["Configuration metrics", "Paired task deltas", "Operational failures", "Task, category, and language drill-down", "Effort and telemetry completeness", "Historical compatibility and lineage", "Metric completeness"]) assert.match(html, new RegExp(heading));
+    assert.doesNotMatch(html, /agent-harness-report-|SECRET_SENTINEL/);
     assert.equal(data.configurations.find((item: any) => item.configuration_id === "codex-medium").quality_denominator, 1);
     assert.equal(data.configurations.find((item: any) => item.configuration_id === "codex-high").quality_denominator, 0);
     assert.equal(data.configurations.find((item: any) => item.configuration_id === "codex-high").invalid_or_infrastructure_attempts, 1);
