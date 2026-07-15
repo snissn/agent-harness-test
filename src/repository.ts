@@ -432,7 +432,9 @@ export async function validateRepository(rootInput: string): Promise<void> {
           throw error;
         }
         if (!fileType.isFile()) throw new Error(`run artifact is not a regular file: ${artifactPath}`);
-        if (`sha256:${sha256(await readFile(file))}` !== asString(artifact.digest)) throw new Error(`run artifact digest mismatch: ${artifactPath}`);
+        const artifactBytes = await readFile(file);
+        if (artifact.bytes !== undefined && artifact.bytes !== artifactBytes.byteLength) throw new Error(`run artifact byte count mismatch: ${artifactPath} declares ${artifact.bytes}, actual ${artifactBytes.byteLength}`);
+        if (`sha256:${sha256(artifactBytes)}` !== asString(artifact.digest)) throw new Error(`run artifact digest mismatch: ${artifactPath}`);
       } catch (error) { diagnostics.push({ file: run.file, code: "semantic/run-artifact", message: error instanceof Error ? error.message : String(error) }); }
     }
     const request = runRequestsByFile.get(resolve(dirname(run.file), "request.json"));

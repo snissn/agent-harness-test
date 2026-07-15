@@ -59,8 +59,9 @@ resolution metadata. Every campaign run result must also preserve the campaign
 runner's exact version, Git commit, and runtime name/version in its provenance.
 Every listed run artifact must resolve to a regular,
 non-symlink file beneath the campaign directory and match its declared raw-byte
-SHA-256 digest. Standard artifact kinds must also use their corresponding request
-target beneath `runs/<run-id>/`; correctly hashed swapped or mislabeled paths are
+SHA-256 digest. When optional `bytes` metadata is present, it must equal the raw
+artifact buffer length. Standard artifact kinds must also use their corresponding
+request target beneath `runs/<run-id>/`; correctly hashed swapped or mislabeled paths are
 invalid. Successful
 run results are also joined to their co-located
 `evaluator.json`: validation checks its manifest digest, evaluator/task identity,

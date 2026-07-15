@@ -688,8 +688,15 @@ test("unpinned model requests accept result-only snapshot resolution", async () 
 
 test("run artifacts verify valid referenced bytes", async () => {
   const fixture = await campaignRunFixture(); const bytes = "captured output\n"; const path = `runs/${fixture.result.run_id}/stdout.log`; await writeFile(join(fixture.root, "results", fixture.result.experiment.id, fixture.result.campaign_id, path), bytes);
-  fixture.result.artifacts = [{ kind: "stdout", path, digest: `sha256:${sha256(bytes)}` }]; fixture.campaign.runs[0].digest = manifestDigest(fixture.result);
+  fixture.result.artifacts = [{ kind: "stdout", path, digest: `sha256:${sha256(bytes)}`, bytes: Buffer.byteLength(bytes) }]; fixture.campaign.runs[0].digest = manifestDigest(fixture.result);
   await writeFile(fixture.resultFile, JSON.stringify(fixture.result)); await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign)); await validateRepository(fixture.root);
+});
+
+test("run artifacts reject incorrect declared byte counts", async () => {
+  const fixture = await campaignRunFixture(); const bytes = Buffer.from([0, 1, 2, 255]); const path = `runs/${fixture.result.run_id}/stdout.log`; await writeFile(join(fixture.root, "results", fixture.result.experiment.id, fixture.result.campaign_id, path), bytes);
+  fixture.result.artifacts = [{ kind: "stdout", path, digest: `sha256:${sha256(bytes)}`, bytes: bytes.byteLength + 1 }]; fixture.campaign.runs[0].digest = manifestDigest(fixture.result);
+  await writeFile(fixture.resultFile, JSON.stringify(fixture.result)); await writeFile(fixture.campaignFile, JSON.stringify(fixture.campaign));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-artifact" && item.message.includes(`run artifact byte count mismatch: ${path}`)));
 });
 
 test("run artifacts reject missing referenced files", async () => {
