@@ -50,7 +50,9 @@ attempt identities. Its resolved harness, requested model identity, effort,
 limits, and execution provenance must preserve the resolved request. When the
 request pins `expected_snapshot_id`, the result must report an available snapshot
 with that exact resolved ID; unpinned requests may retain result-only snapshot
-resolution metadata. Every listed run artifact must resolve to a regular,
+resolution metadata. Every campaign run result must also preserve the campaign
+runner's exact version, Git commit, and runtime name/version in its provenance.
+Every listed run artifact must resolve to a regular,
 non-symlink file beneath the campaign directory and match its declared raw-byte
 SHA-256 digest. Standard artifact kinds must also use their corresponding request
 target beneath `runs/<run-id>/`; correctly hashed swapped or mislabeled paths are
@@ -61,11 +63,15 @@ mirrored check results, scoring derivations, and end-to-end pass state. Only
 quality-eligible terminal outcomes can pass end to end; evaluator scores remain
 available for salvageable infrastructure and operator failures. Finalized
 campaign summaries are recomputed only after every unique run reference verifies.
+Campaign `planned_run_count` is independently derived from the selected suite
+tasks multiplied by experiment configurations and repetitions. It always records
+the complete initial plan, so partial and cancelled campaigns do not shrink it.
 `recorded_runs` counts referenced results, `operational_successes` counts true
 `terminal.operational_success` values, and the end-to-end counter uses its run
 evaluation boolean. Quality eligibility is derived from attempt lineage,
 evaluation status, and the terminal failure taxonomy; `agent_failed` is scorable
-only with `agent` attribution, contradictory attributions are rejected, and
+only with `agent` attribution. Both `agent_completed` and `agent_failed` reject
+contradictory non-agent attributions, and
 operator-initiated retries and resumes are diagnostic and ineligible. Campaign
 quality and invalid-run counters use that same derived eligibility rule. Per SPEC
 section 11.2, `invalid_runs` narrowly counts results excluded from the quality

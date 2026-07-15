@@ -191,6 +191,13 @@ export async function validateRepository(rootInput: string): Promise<void> {
         && asString(targetSuite.version) === asString(campaignSuite.version);
       if (!linked) { diagnostics.push({ file: campaign.file, code: "semantic/campaign-run-identity", message: `run result identity does not match campaign reference ${runId}` }); referencesValid = false; }
       if (asString(reference.digest) !== manifestDigest(target.value)) { diagnostics.push({ file: campaign.file, code: "semantic/campaign-run-digest", message: `run result digest mismatch for ${runId}` }); referencesValid = false; }
+      const campaignRunner = asObject(campaign.value.runner), provenance = asObject(target.value.provenance);
+      const campaignRuntime = asObject(campaignRunner.runtime), runRuntime = asObject(provenance.runner_runtime);
+      const runnerMatches = asString(campaignRunner.version) === asString(provenance.runner_version)
+        && asString(campaignRunner.git_commit) === asString(provenance.runner_git_commit)
+        && asString(campaignRuntime.name) === asString(runRuntime.name)
+        && asString(campaignRuntime.version) === asString(runRuntime.version);
+      if (!runnerMatches) { diagnostics.push({ file: campaign.file, code: "semantic/campaign-runner", message: `run result runner provenance does not match campaign runner for ${runId}` }); referencesValid = false; }
       referencedRuns.push(target);
     }
     if (referencesValid) {
@@ -327,7 +334,19 @@ export async function validateRepository(rootInput: string): Promise<void> {
     const experimentReference = asObject(campaign.value.experiment), suiteReference = asObject(campaign.value.suite);
     const experiment = validateSpecReference(campaign, experimentReference, "experiment", experimentByIdentity);
     const suite = validateSpecReference(campaign, suiteReference, "suite", suiteByIdentity);
-    if (experiment && suite && manifestDigest(suiteReference) !== manifestDigest(experiment.value.suite)) diagnostics.push({ file: campaign.file, code: "semantic/experiment-suite", message: "campaign suite does not match the experiment's pinned suite" });
+    const suiteMatchesExperiment = experiment && suite && manifestDigest(suiteReference) === manifestDigest(experiment.value.suite);
+    if (experiment && suite && !suiteMatchesExperiment) diagnostics.push({ file: campaign.file, code: "semantic/experiment-suite", message: "campaign suite does not match the experiment's pinned suite" });
+    if (experiment && suite && suiteMatchesExperiment) {
+      const selection = experiment.value.task_selection === undefined ? undefined : asObject(experiment.value.task_selection);
+      const selectedTaskCount = (suite.value.tasks as unknown[]).filter((item) => {
+        const taskId = asString(asObject(item).id);
+        if (selection && Array.isArray(selection.include)) return selection.include.includes(taskId);
+        if (selection && Array.isArray(selection.exclude)) return !selection.exclude.includes(taskId);
+        return true;
+      }).length;
+      const plannedRunCount = selectedTaskCount * (experiment.value.configurations as unknown[]).length * (experiment.value.repetitions as number);
+      if (campaign.value.planned_run_count !== plannedRunCount) diagnostics.push({ file: campaign.file, code: "semantic/campaign-plan", message: `campaign planned_run_count must be ${plannedRunCount}` });
+    }
   }
   for (const manifest of repositoryManifests.filter((item) => item.kind === "run-request" || item.kind === "run-result")) {
     const experimentReference = asObject(manifest.value.experiment), suiteReference = asObject(manifest.value.suite);
@@ -404,8 +423,13 @@ export async function validateRepository(rootInput: string): Promise<void> {
       const artifact = asObject(item), artifactPath = asString(artifact.path);
       try {
         const file = await resolveSafe(campaignDirectory, artifactPath);
-        if (!await exists(file)) throw new Error(`missing run artifact: ${artifactPath}`);
-        if (!(await lstat(file)).isFile()) throw new Error(`run artifact is not a regular file: ${artifactPath}`);
+        let fileType;
+        try { fileType = await lstat(file); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error(`missing run artifact: ${artifactPath}`);
+          throw error;
+        }
+        if (!fileType.isFile()) throw new Error(`run artifact is not a regular file: ${artifactPath}`);
         if (`sha256:${sha256(await readFile(file))}` !== asString(artifact.digest)) throw new Error(`run artifact digest mismatch: ${artifactPath}`);
       } catch (error) { diagnostics.push({ file: run.file, code: "semantic/run-artifact", message: error instanceof Error ? error.message : String(error) }); }
     }
@@ -458,7 +482,7 @@ export async function validateRepository(rootInput: string): Promise<void> {
     const summary = asObject(run.value.evaluation), summaryStatus = asString(summary.status);
     const terminal = asObject(run.value.terminal), terminalReason = asString(terminal.reason), terminalAttribution = asString(terminal.attribution);
     const attempt = asObject(run.value.attempt);
-    if (terminalReason === "agent_failed" && terminalAttribution !== "agent") diagnostics.push({ file: run.file, code: "semantic/run-terminal-attribution", message: `agent_failed terminal reason requires agent attribution, got ${terminalAttribution}` });
+    if ((terminalReason === "agent_completed" || terminalReason === "agent_failed") && terminalAttribution !== "agent") diagnostics.push({ file: run.file, code: "semantic/run-terminal-attribution", message: `${terminalReason} terminal reason requires agent attribution, got ${terminalAttribution}` });
     const qualityEligible = derivedQualityEligibility(run.value);
     if (summary.eligible_for_quality_aggregate !== qualityEligible) diagnostics.push({ file: run.file, code: "semantic/run-quality-eligibility", message: `eligible_for_quality_aggregate must be ${qualityEligible} for ${asString(attempt.mode)} attempt, evaluation status ${summaryStatus}, and terminal reason ${terminalReason}` });
     const evaluation = evaluationsByFile.get(resolve(dirname(run.file), "evaluator.json"));
