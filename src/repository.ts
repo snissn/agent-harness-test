@@ -9,6 +9,7 @@ type ObjectValue = Record<string, unknown>;
 type Manifest = { file: string; kind: string; value: ObjectValue };
 const nonDraft = new Set(["candidate", "released", "retired"]);
 const scorableFailureReasons = new Set(["wall_time_exhausted", "token_limit_exhausted", "tool_limit_exhausted", "agent_failed"]);
+const artifactTargetKeys: Record<string, string> = { request: "request", "run-result": "run_result", "native-events": "native_events", "normalized-events": "normalized_events", stdout: "stdout", stderr: "stderr", "final-message": "final_message", "workspace-patch": "workspace_patch", "workspace-tree": "workspace_tree", "evaluator-result": "evaluator_result" };
 
 export function safeRelativePath(value: string): boolean {
   return value.length > 0 && !value.includes("\\") && !value.includes("\0") && !/^[A-Za-z]:/.test(value) && !posix.isAbsolute(value) && value === posix.normalize(value) && !value.split("/").some((part) => !part || part === "." || part === "..");
@@ -334,6 +335,13 @@ export async function validateRepository(rootInput: string): Promise<void> {
           const environment = asObject(task.value.environment);
           if (manifestDigest(manifest.value.network) !== manifestDigest(environment.network)) diagnostics.push({ file: manifest.file, code: "semantic/run-network-policy", message: "run request network policy does not match TaskSpec" });
         } catch (error) { diagnostics.push({ file: manifest.file, code: "semantic/run-network-policy", message: error instanceof Error ? error.message : String(error) }); }
+        try {
+          const runtime = asObject(asObject(task.value.environment).runtime), execution = asObject(manifest.value.execution);
+          if (runtime.kind === "oci") {
+            const imageDigest = asString(runtime.image_digest);
+            if (execution.environment_digest !== imageDigest || execution.image_digest !== imageDigest) diagnostics.push({ file: manifest.file, code: "semantic/run-environment", message: "run request execution environment_digest and image_digest must match the TaskSpec OCI image_digest" });
+          }
+        } catch (error) { diagnostics.push({ file: manifest.file, code: "semantic/run-environment", message: error instanceof Error ? error.message : String(error) }); }
       }
     }
     if (manifest.kind === "run-request") {
@@ -378,6 +386,14 @@ export async function validateRepository(rootInput: string): Promise<void> {
     }
     const request = runRequestsByFile.get(resolve(dirname(run.file), "request.json"));
     if (!request) { diagnostics.push({ file: run.file, code: "semantic/run-request-reference", message: "run result requires a co-located request.json" }); continue; }
+    const artifactTargets = asObject(request.value.artifact_targets);
+    for (const item of run.value.artifacts as unknown[]) {
+      const artifact = asObject(item), kind = asString(artifact.kind), targetKey = artifactTargetKeys[kind];
+      if (targetKey) {
+        const target = artifactTargets[targetKey], expected = typeof target === "string" ? `runs/${asString(run.value.run_id)}/${target}` : undefined;
+        if (artifact.path !== expected) diagnostics.push({ file: run.file, code: "semantic/run-artifact-target", message: `${kind} artifact path must match request target ${expected ?? targetKey}` });
+      }
+    }
     const provenance = asObject(run.value.provenance);
     if (asString(provenance.request_digest) !== manifestDigest(request.value)) diagnostics.push({ file: run.file, code: "semantic/run-request-digest", message: "run result request_digest does not match request.json" });
     const requestConfiguration = asObject(request.value.configuration), resolvedConfiguration = asObject(run.value.resolved_configuration);

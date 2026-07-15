@@ -35,7 +35,9 @@ manifest digests. Campaign, run-request, and run-result experiment/suite/task
 references must resolve the exact loaded manifest path and digest. Run task
 references also pin the TaskSpec prompt, initial-state, and evaluator digests;
 run-request workspace fingerprints and network policy must exactly agree with the
-same TaskSpec. Campaign and run suites must equal their experiment's pinned suite;
+same TaskSpec. For OCI tasks, both request execution digest fields must equal the
+TaskSpec runtime image digest. Campaign and run suites must equal their
+experiment's pinned suite;
 run tasks must belong
 to that suite and satisfy experiment selection. A run-request configuration must
 exactly equal one experiment-declared configuration. Every run
@@ -47,7 +49,9 @@ request pins `expected_snapshot_id`, the result must report an available snapsho
 with that exact resolved ID; unpinned requests may retain result-only snapshot
 resolution metadata. Every listed run artifact must resolve to a regular,
 non-symlink file beneath the campaign directory and match its declared raw-byte
-SHA-256 digest. Successful
+SHA-256 digest. Standard artifact kinds must also use their corresponding request
+target beneath `runs/<run-id>/`; correctly hashed swapped or mislabeled paths are
+invalid. Successful
 run results are also joined to their co-located
 `evaluator.json`: validation checks its manifest digest, evaluator/task identity,
 mirrored check results, scoring derivations, and end-to-end pass state. Only
