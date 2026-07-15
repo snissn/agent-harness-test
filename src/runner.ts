@@ -292,6 +292,51 @@ export function redact(value: string, secrets: string[]): string {
     value,
   );
 }
+/** Byte-level redaction deliberately never decodes workspace files as text. */
+async function redactWorkspace(root: string, secrets: string[]): Promise<void> {
+  const patterns = [...new Set(secrets.filter(Boolean))]
+    .map((secret) => Buffer.from(secret, "utf8"))
+    .filter((secret) => secret.length > 0)
+    .sort((a, b) => b.length - a.length);
+  if (!patterns.length) return;
+  const replacement = Buffer.from("[REDACTED]", "utf8");
+  const replace = (body: Buffer): Buffer => {
+    const chunks: Buffer[] = [];
+    let cursor = 0;
+    let changed = false;
+    while (cursor < body.length) {
+      const match = patterns.find(
+        (pattern) =>
+          cursor + pattern.length <= body.length &&
+          body.subarray(cursor, cursor + pattern.length).equals(pattern),
+      );
+      if (match) {
+        chunks.push(replacement);
+        cursor += match.length;
+        changed = true;
+      } else {
+        const end = cursor + 1;
+        chunks.push(body.subarray(cursor, end));
+        cursor = end;
+      }
+    }
+    return changed ? Buffer.concat(chunks) : body;
+  };
+  const walk = async (directory: string): Promise<void> => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) await walk(path);
+      else if (entry.isFile()) {
+        const body = await readFile(path);
+        const redacted = replace(body);
+        if (redacted !== body) await writeFile(path, redacted);
+      }
+      // Symlinks are never followed: they are evidence metadata, not files to
+      // traverse or rewrite outside the workspace root.
+    }
+  };
+  await walk(root);
+}
 const cloneFreeze = <T>(value: T): T => {
   const copy = JSON.parse(JSON.stringify(value)) as T;
   const freeze = (v: unknown): unknown => {
@@ -719,11 +764,19 @@ export class DeterministicRunner {
         r.code,
       );
     }
+    const protectedWorkspace = join(root, ".evaluator-workspace");
+    if (materializationVerified && (await exists(activeWorkspace)))
+      await cp(activeWorkspace, protectedWorkspace, {
+        recursive: true,
+        errorOnExist: true,
+        verbatimSymlinks: true,
+      });
     // Snapshot before writing any final evidence. The active workspace is then
     // removed; a late, non-cooperative adapter can only recreate that disposable
     // path and cannot alter the retained workspace or its digest.
     if (await exists(activeWorkspace)) {
       await phase("snapshot", async () => {
+        await redactWorkspace(activeWorkspace, secrets);
         await cp(activeWorkspace, workspace, { recursive: true, errorOnExist: true, verbatimSymlinks: true });
         await rm(activeWorkspace, { recursive: true, force: true });
       });
@@ -757,9 +810,7 @@ export class DeterministicRunner {
         diffManifest(initialManifest, finalManifest),
       );
       if (materializationVerified) {
-        const protectedWorkspace = join(root, ".evaluator-workspace");
         try {
-        await cp(workspace, protectedWorkspace, { recursive: true, verbatimSymlinks: true });
         const raw = await phase("evaluation", () =>
           o.evaluator.evaluate({ workspace: protectedWorkspace, request }),
         );

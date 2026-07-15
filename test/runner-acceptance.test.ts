@@ -14,6 +14,14 @@ const execFile = promisify(execFileCallback);
 const schemas = join(root, "spec/schemas");
 const resultRoot = (f: Awaited<ReturnType<typeof fixture>>) =>
   join(f.dir, "results/fake-experiment/fake-campaign/runs", f.request.run_id);
+async function treeContains(root: string, needle: Buffer): Promise<boolean> {
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    const path = join(root, entry.name);
+    if (entry.isDirectory() && (await treeContains(path, needle))) return true;
+    if (entry.isFile() && (await readFile(path)).includes(needle)) return true;
+  }
+  return false;
+}
 
 async function fixture(runId = "run-acceptance") {
   const dir = await mkdtemp(join(tmpdir(), "aht-acceptance-"));
@@ -164,16 +172,19 @@ test("hard timeout snapshots partial capture and clears timers without late muta
 test("whole-attempt secret redaction and workspace tree metadata are durable", async () => {
   const f = await fixture("run-secret-tree");
   const secret = "RUNTIME_SECRET_SENTINEL";
+  let evaluatorSawOriginalWorkspace = false;
   try {
     await writeFile(join(f.state, "tool"), "#!/bin/sh\n"); await chmod(join(f.state, "tool"), 0o755); await symlink("tool", join(f.state, "tool-link"));
     await mkdir(join(f.state, ".git")); await writeFile(join(f.state, ".git", "internal"), "not evidence\n");
     f.request.workspace.initial_tree_digest = await treeDigest(f.state); f.request.task.initial_tree_digest = f.request.workspace.initial_tree_digest;
     const result = await new DeterministicRunner().run(f.request, {
       root: f.dir, stateSource: f.state, prompt: "p", schemaDirectory: schemas, runnerGitCommit: "a11c51473cd5b41dd6bf32ba3ee72de16a8bf303", runtimeRedactions: [secret],
-      adapter: { run: async (input) => { input.capture?.event({ secret }); input.capture?.stdout(secret); return { terminal: "provider_error", stdout: secret, stderr: secret, finalMessage: secret }; } },
-      evaluator: { evaluate: async () => { throw new Error(secret); } }, taskChecks: [{ id: "core", weight: 1, required: true }],
+      adapter: { run: async (input) => { await mkdir(join(input.workspace, "nested")); await writeFile(join(input.workspace, "nested", "secret.bin"), Buffer.from(`binary:${secret}:payload`)); input.capture?.event({ secret }); input.capture?.stdout(secret); return { terminal: "provider_error", stdout: secret, stderr: secret, finalMessage: secret }; } },
+      evaluator: { evaluate: async ({ workspace }) => { evaluatorSawOriginalWorkspace = (await readFile(join(workspace, "nested", "secret.bin"))).includes(Buffer.from(secret)); return { schema_version: "0.2.0", task_id: f.request.task.id, task_version: f.request.task.version, status: "ok", started_at: "2026-01-01T00:00:00Z", finished_at: "2026-01-01T00:00:00Z", duration_ms: 0, checks: [{ id: "core", score: 1, passed: true }] }; } }, taskChecks: [{ id: "core", weight: 1, required: true }],
     });
     assert.equal(JSON.stringify(result).includes(secret), false);
+    assert.equal(evaluatorSawOriginalWorkspace, true);
+    assert.equal(await treeContains(resultRoot(f), Buffer.from(secret)), false);
     const files = await readdir(resultRoot(f));
     for (const file of files) if ((await lstat(join(resultRoot(f), file))).isFile()) assert.equal((await readFile(join(resultRoot(f), file), "utf8")).includes(secret), false, file);
     const entries = JSON.parse(await readFile(join(resultRoot(f), "workspace-tree.json"), "utf8")).entries;
