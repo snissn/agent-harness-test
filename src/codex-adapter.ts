@@ -5,7 +5,7 @@ import { HarnessAdapter, HarnessResult } from "./runner.js";
 
 export type CodexTerminal = "agent_completed" | "agent_failed" | "provider_error" | "harness_error" | "wall_time_exhausted";
 export function codexArgv(input: { executable: string; workspace: string; model: string; effort: string; network: boolean }): string[] {
-  return [input.executable, "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--strict-config", "--sandbox", "workspace-write", "--cd", input.workspace, "--model", input.model, "--config", `approval_policy=\"never\"`, "--config", `model_reasoning_effort=\"${input.effort}\"`, "--config", `sandbox_workspace_write.network_access=${input.network}`, "-"];
+  return [input.executable, "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--strict-config", "--skip-git-repo-check", "--sandbox", "workspace-write", "--cd", input.workspace, "--model", input.model, "--config", `approval_policy=\"never\"`, "--config", `model_reasoning_effort=\"${input.effort}\"`, "--config", `sandbox_workspace_write.network_access=${input.network}`, "-"];
 }
 export function parseCodexJsonl(lines: string[], exitCode: number | null, timedOut = false): HarnessResult {
   if (timedOut) return { terminal: "wall_time_exhausted", events: lines, exitCode };
