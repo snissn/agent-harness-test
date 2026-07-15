@@ -30,6 +30,13 @@ deterministic validation/CI gate, and a provider-free deterministic runner.
   path without a live provider. Output directories must be fresh: finalized
   artifacts are never overwritten.
 
+The fake-fixture characterization is observational, not a product-performance
+claim: the lifecycle test records monotonic per-phase timings in `run.json`,
+plus initial/final workspace byte counts. On this local checkout the complete
+schema-valid success fixture test took about 121 ms; this includes Node startup,
+schema loading, filesystem work, and test harness overhead, so it is useful only
+for detecting accidental pathological runner overhead on the same fixture.
+
 ## Core principles
 
 - Specifications precede fixtures and implementation.
