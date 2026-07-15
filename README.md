@@ -67,6 +67,36 @@ campaign ID without colliding in the projection.
 
 No provider credentials are needed to rebuild or open the report.
 
+## Deploy the report to Cloudflare
+
+The public site is an assets-only Cloudflare Worker containing a snapshot of
+the generated report. It does not run agents, expose evaluator internals, or
+require provider credentials.
+
+For a Git-connected Workers deployment, use these settings:
+
+- **Worker name:** `agent-harness-test`
+- **Root directory:** `/` (the repository root containing `wrangler.jsonc`)
+- **Build command:** `npm run build`
+- **Deploy command:** `npm run deploy`
+- **Production branch:** `main`
+
+The checked-in `.node-version` selects Node.js 24 in Cloudflare Builds, and
+`wrangler.jsonc` publishes `dist/` as static assets. Preview builds for
+non-production branches are optional. Leave automatic dependency installation
+enabled so the build-only `tsx` and `wrangler` development dependencies are
+available. To verify the complete build and deploy configuration without
+publishing anything, run:
+
+```sh
+npm ci
+npm run build
+npm run deploy:dry-run
+```
+
+The generated `dist/` directory is disposable and ignored by Git. Each deploy
+rebuilds it from the versioned source artifacts in the checkout.
+
 ## Runner contracts
 
 Adapters receive an immutable resolved request, workspace, exact prompt bytes,
