@@ -24,6 +24,9 @@ nonzero on any invalid input. Validate one named file structurally with
 `npm run validate:file -- tasks/<id>/<version>/task.yaml`. The one-file command
 also retains `run-request.json` and `run-result.json` as explicit standalone
 filename aliases; repository discovery does not recognize those aliases.
+Before enumeration, each canonical discovery root (`spec/examples`, `tasks`,
+`suites`, `experiments`, and `results`) must be an actual non-symlink directory;
+missing roots are ignored, while symlink and non-directory roots fail validation.
 
 Task authors should add a failing fixture/test first, update `SPEC.md` and its
 schema before using a new concept, then add the valid manifest/artifacts and

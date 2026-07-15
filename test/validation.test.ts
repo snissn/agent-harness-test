@@ -79,6 +79,31 @@ test("example discovery ignores symlinks and non-regular manifest-like entries",
   }
 });
 
+test("top-level discovery roots reject symlinks without loading external manifests", async () => {
+  const fixture = await semanticFixture();
+  const external = await mkdtemp(join(tmpdir(), "aht-external-"));
+  try {
+    await validateRepository(fixture.root);
+    await mkdir(join(external, "poison"), { recursive: true });
+    await writeFile(join(external, "poison", "1.0.0.json"), "{ invalid");
+    await symlink(external, join(fixture.root, "suites"), "dir");
+    await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError
+      && error.diagnostics.some((item) => item.code === "semantic/discovery-root" && item.file.endsWith("/suites"))
+      && !error.diagnostics.some((item) => item.file.endsWith("/suites/poison/1.0.0.json")));
+
+    await unlink(join(fixture.root, "suites"));
+    await mkdir(join(external, "poison", "1.0.0"));
+    await writeFile(join(external, "poison", "1.0.0", "task.json"), "{ invalid");
+    await rm(join(fixture.root, "tasks"), { recursive: true });
+    await symlink(external, join(fixture.root, "tasks"), "dir");
+    await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError
+      && error.diagnostics.some((item) => item.code === "semantic/discovery-root" && item.file.endsWith("/tasks"))
+      && !error.diagnostics.some((item) => item.file.endsWith("/tasks/poison/1.0.0/task.json")));
+  } finally {
+    await Promise.all([rm(fixture.root, { recursive: true, force: true }), rm(external, { recursive: true, force: true })]);
+  }
+});
+
 test("RFC 8785 canonical JSON and manifest digest have stable vectors", () => {
   assert.equal(canonicalJson({ b: [3, { z: 2, a: 1 }], a: "x" }), '{"a":"x","b":[3,{"a":1,"z":2}]}');
   assert.equal(manifestDigest({ a: 1 }), "sha256:015abd7f5cc57a2dd94b7590f04ad8084273905ee33ec5cebeae62276a97f862");

@@ -23,6 +23,19 @@ async function isDirectory(path: string): Promise<boolean> {
   try { return (await stat(path)).isDirectory(); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
 }
+async function discoveryDirectory(path: string, diagnostics: Diagnostic[]): Promise<boolean> {
+  try {
+    const fileType = await lstat(path);
+    if (!fileType.isDirectory() || fileType.isSymbolicLink()) {
+      diagnostics.push({ file: path, code: "semantic/discovery-root", message: "repository discovery root must be a regular non-symlink directory" });
+      return false;
+    }
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
 function asObject(value: unknown): ObjectValue { if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("expected object"); return value as ObjectValue; }
 function asString(value: unknown): string { if (typeof value !== "string") throw new Error("expected string"); return value; }
 
@@ -40,7 +53,6 @@ async function resolveSafe(root: string, value: string): Promise<string> {
 }
 
 async function walk(directory: string, out: string[]): Promise<void> {
-  if (!await exists(directory)) return;
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const file = join(directory, entry.name);
     if (entry.isSymbolicLink()) continue;
@@ -50,7 +62,6 @@ async function walk(directory: string, out: string[]): Promise<void> {
 }
 async function taskManifests(tasksDirectory: string): Promise<string[]> {
   const manifests: string[] = [];
-  if (!await exists(tasksDirectory)) return manifests;
   for (const task of await readdir(tasksDirectory, { withFileTypes: true })) {
     if (!task.isDirectory() || task.isSymbolicLink()) continue;
     const taskDirectory = join(tasksDirectory, task.name);
@@ -64,7 +75,6 @@ async function taskManifests(tasksDirectory: string): Promise<string[]> {
 }
 async function canonicalArtifactDirectories(tasksDirectory: string): Promise<string[]> {
   const artifacts: string[] = [];
-  if (!await exists(tasksDirectory)) return artifacts;
   for (const task of await readdir(tasksDirectory, { withFileTypes: true })) {
     if (!task.isDirectory() || task.isSymbolicLink()) continue;
     const taskDirectory = join(tasksDirectory, task.name);
@@ -104,11 +114,16 @@ export async function validateRepository(rootInput: string): Promise<void> {
   const diagnostics: Diagnostic[] = [];
   const manifests: Manifest[] = [];
   const exampleDirectory = join(root, "spec/examples");
-  const exampleFiles = await exists(exampleDirectory)
+  const exampleFiles = await discoveryDirectory(exampleDirectory, diagnostics)
     ? (await readdir(exampleDirectory, { withFileTypes: true })).filter((entry) => entry.isFile() && isManifestPath(entry.name)).map((entry) => join(exampleDirectory, entry.name))
     : [];
-  const repoFiles = await taskManifests(join(root, "tasks"));
-  for (const directory of ["suites", "experiments", "results"]) await walk(join(root, directory), repoFiles);
+  const tasksDirectory = join(root, "tasks");
+  const tasksDirectoryAvailable = await discoveryDirectory(tasksDirectory, diagnostics);
+  const repoFiles = tasksDirectoryAvailable ? await taskManifests(tasksDirectory) : [];
+  for (const directory of ["suites", "experiments", "results"]) {
+    const discoveryRoot = join(root, directory);
+    if (await discoveryDirectory(discoveryRoot, diagnostics)) await walk(discoveryRoot, repoFiles);
+  }
   for (const file of [...exampleFiles, ...repoFiles].sort()) {
     const repositoryPath = relative(root, file).split(sep).join("/");
     const kind = kindFromRepositoryPath(repositoryPath);
@@ -228,7 +243,7 @@ export async function validateRepository(rootInput: string): Promise<void> {
     } catch (error) { diagnostics.push({ file: manifest.file, code: "semantic/task-artifact", message: error instanceof Error ? error.message : String(error) }); }
   }
   const taskRoots = new Set(repositoryManifests.filter((item) => item.kind === "task").map((item) => join(root, "tasks", asString(item.value.id), asString(item.value.version))));
-  const artifacts = await canonicalArtifactDirectories(join(root, "tasks"));
+  const artifacts = tasksDirectoryAvailable ? await canonicalArtifactDirectories(tasksDirectory) : [];
   for (const artifact of artifacts) {
     if (!taskRoots.has(join(artifact, ".."))) diagnostics.push({ file: artifact, code: "semantic/orphan-artifact", message: "state/evaluator artifact has no co-located task spec" });
   }
