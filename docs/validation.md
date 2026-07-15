@@ -62,14 +62,15 @@ quality-eligible terminal outcomes can pass end to end; evaluator scores remain
 available for salvageable infrastructure and operator failures. Finalized
 campaign summaries are recomputed only after every unique run reference verifies.
 `recorded_runs` counts referenced results, `operational_successes` counts true
-`terminal.operational_success` values, and the quality-eligible and end-to-end
-counters use their corresponding run evaluation booleans. Quality eligibility is
-verified from attempt lineage, evaluation status, and the terminal failure taxonomy;
-operator-initiated retries and resumes are diagnostic and ineligible. Per SPEC section
-11.2, `invalid_runs` narrowly counts results excluded from the quality denominator
-(`eligible_for_quality_aggregate = false`); it is not inferred from planned run
-counts or campaign status. This command deliberately does not run agents or
-require provider credentials.
+`terminal.operational_success` values, and the end-to-end counter uses its run
+evaluation boolean. Quality eligibility is derived from attempt lineage,
+evaluation status, and the terminal failure taxonomy; `agent_failed` is scorable
+only with `agent` attribution, contradictory attributions are rejected, and
+operator-initiated retries and resumes are diagnostic and ineligible. Campaign
+quality and invalid-run counters use that same derived eligibility rule. Per SPEC
+section 11.2, `invalid_runs` narrowly counts results excluded from the quality
+denominator; it is not inferred from planned run counts or campaign status. This
+command deliberately does not run agents or require provider credentials.
 
 Resolved requests must also agree with deterministic control-plane provenance:
 Codex `invocation.full_access` exactly tracks the documented sandbox-bypass argv

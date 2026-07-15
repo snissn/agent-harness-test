@@ -746,6 +746,28 @@ test("run quality eligibility follows evaluation and terminal failure taxonomy",
   providerFailure.result.evaluation.eligible_for_quality_aggregate = false; await writeFile(providerFailure.resultFile, JSON.stringify(providerFailure.result)); await validateRepository(providerFailure.root);
 });
 
+test("agent failures are scorable only with agent attribution", async () => {
+  const agentFailure = await runEvaluationFixture();
+  agentFailure.result.terminal = { reason: "agent_failed", attribution: "agent", operational_success: false };
+  await writeFile(agentFailure.resultFile, JSON.stringify(agentFailure.result));
+  await validateRepository(agentFailure.root);
+
+  for (const attribution of ["provider", "harness", "environment", "runner", "operator"]) {
+    const fixture = await runEvaluationFixture();
+    fixture.result.terminal = { reason: "agent_failed", attribution, operational_success: false };
+    const campaignFile = join(fixture.root, "results", fixture.result.experiment.id, fixture.result.campaign_id, "campaign.json");
+    const campaign = JSON.parse(await (await import("node:fs/promises")).readFile(campaignFile, "utf8"));
+    campaign.runs = [{ run_id: fixture.result.run_id, path: `runs/${fixture.result.run_id}/run.json`, digest: manifestDigest(fixture.result) }];
+    campaign.summary = { recorded_runs: 1, operational_successes: 0, quality_eligible_runs: 1, end_to_end_passes: 0, invalid_runs: 0 };
+    await writeFile(fixture.resultFile, JSON.stringify(fixture.result));
+    await writeFile(campaignFile, JSON.stringify(campaign));
+    await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError
+      && error.diagnostics.some((item) => item.code === "semantic/run-terminal-attribution")
+      && error.diagnostics.some((item) => item.code === "semantic/run-quality-eligibility" && item.message.includes("must be false"))
+      && error.diagnostics.some((item) => item.code === "semantic/campaign-summary" && item.message.includes("quality_eligible_runs must be 0")));
+  }
+});
+
 test("operator retries and resumes are excluded from headline quality aggregates", async () => {
   for (const mode of ["retry", "resume"]) {
     const fixture = await runEvaluationFixture();

@@ -8,7 +8,7 @@ import { Diagnostic, ValidationError } from "./types.js";
 type ObjectValue = Record<string, unknown>;
 type Manifest = { file: string; kind: string; value: ObjectValue };
 const nonDraft = new Set(["candidate", "released", "retired"]);
-const scorableFailureReasons = new Set(["wall_time_exhausted", "token_limit_exhausted", "tool_limit_exhausted", "agent_failed"]);
+const scorableFailureReasons = new Set(["wall_time_exhausted", "token_limit_exhausted", "tool_limit_exhausted"]);
 const artifactTargetKeys: Record<string, string> = { request: "request", "run-result": "run_result", "native-events": "native_events", "normalized-events": "normalized_events", stdout: "stdout", stderr: "stderr", "final-message": "final_message", "workspace-patch": "workspace_patch", "workspace-tree": "workspace_tree", "evaluator-result": "evaluator_result" };
 
 export function safeRelativePath(value: string): boolean {
@@ -38,6 +38,13 @@ async function discoveryDirectory(path: string, diagnostics: Diagnostic[]): Prom
 }
 function asObject(value: unknown): ObjectValue { if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("expected object"); return value as ObjectValue; }
 function asString(value: unknown): string { if (typeof value !== "string") throw new Error("expected string"); return value; }
+function derivedQualityEligibility(value: ObjectValue): boolean {
+  const summary = asObject(value.evaluation), terminal = asObject(value.terminal), attempt = asObject(value.attempt);
+  const terminalReason = asString(terminal.reason), terminalAttribution = asString(terminal.attribution);
+  const diagnosticAttempt = attempt.initiated_by === "operator" && (attempt.mode === "retry" || attempt.mode === "resume");
+  const scorableAgentOutcome = terminalAttribution === "agent" && (terminalReason === "agent_completed" || terminalReason === "agent_failed");
+  return !diagnosticAttempt && summary.status === "ok" && (scorableFailureReasons.has(terminalReason) || scorableAgentOutcome);
+}
 
 async function resolveSafe(root: string, value: string): Promise<string> {
   if (!safeRelativePath(value)) throw new Error(`unsafe repository-relative path: ${value}`);
@@ -188,12 +195,13 @@ export async function validateRepository(rootInput: string): Promise<void> {
     }
     if (referencesValid) {
       const summary = asObject(campaign.value.summary);
+      const qualityEligibleRuns = referencedRuns.filter((run) => derivedQualityEligibility(run.value));
       const expectedSummary: Record<string, number> = {
         recorded_runs: referencedRuns.length,
         operational_successes: referencedRuns.filter((run) => asObject(run.value.terminal).operational_success === true).length,
-        quality_eligible_runs: referencedRuns.filter((run) => asObject(run.value.evaluation).eligible_for_quality_aggregate === true).length,
+        quality_eligible_runs: qualityEligibleRuns.length,
         end_to_end_passes: referencedRuns.filter((run) => asObject(run.value.evaluation).end_to_end_passed === true).length,
-        invalid_runs: referencedRuns.filter((run) => asObject(run.value.evaluation).eligible_for_quality_aggregate === false).length
+        invalid_runs: referencedRuns.length - qualityEligibleRuns.length
       };
       for (const [name, expected] of Object.entries(expectedSummary)) if (summary[name] !== expected) diagnostics.push({ file: campaign.file, code: "semantic/campaign-summary", message: `campaign summary ${name} must be ${expected}` });
     }
@@ -448,9 +456,10 @@ export async function validateRepository(rootInput: string): Promise<void> {
   const evaluationsByFile = new Map(repositoryManifests.filter((manifest) => manifest.kind === "evaluation").map((manifest) => [resolve(manifest.file), manifest]));
   for (const run of repositoryManifests.filter((manifest) => manifest.kind === "run-result")) {
     const summary = asObject(run.value.evaluation), summaryStatus = asString(summary.status);
-    const terminal = asObject(run.value.terminal), terminalReason = asString(terminal.reason);
-    const attempt = asObject(run.value.attempt), diagnosticAttempt = attempt.initiated_by === "operator" && (attempt.mode === "retry" || attempt.mode === "resume");
-    const qualityEligible = !diagnosticAttempt && summaryStatus === "ok" && (scorableFailureReasons.has(terminalReason) || (terminalReason === "agent_completed" && terminal.attribution === "agent"));
+    const terminal = asObject(run.value.terminal), terminalReason = asString(terminal.reason), terminalAttribution = asString(terminal.attribution);
+    const attempt = asObject(run.value.attempt);
+    if (terminalReason === "agent_failed" && terminalAttribution !== "agent") diagnostics.push({ file: run.file, code: "semantic/run-terminal-attribution", message: `agent_failed terminal reason requires agent attribution, got ${terminalAttribution}` });
+    const qualityEligible = derivedQualityEligibility(run.value);
     if (summary.eligible_for_quality_aggregate !== qualityEligible) diagnostics.push({ file: run.file, code: "semantic/run-quality-eligibility", message: `eligible_for_quality_aggregate must be ${qualityEligible} for ${asString(attempt.mode)} attempt, evaluation status ${summaryStatus}, and terminal reason ${terminalReason}` });
     const evaluation = evaluationsByFile.get(resolve(dirname(run.file), "evaluator.json"));
     if (!evaluation) {
