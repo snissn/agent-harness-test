@@ -338,7 +338,8 @@ export async function validateRepository(rootInput: string): Promise<void> {
         if (invocation.full_access !== bypassesSandbox) diagnostics.push({ file: manifest.file, code: "semantic/invocation-full-access", message: "Codex full_access must match the sandbox-bypass argv flag" });
       }
       const campaign = byKindIdentity.get(`campaign:${asString(manifest.value.campaign_id)}`);
-      if (campaign) {
+      if (!campaign) diagnostics.push({ file: manifest.file, code: "semantic/campaign-preflight", message: `run request requires campaign ${asString(manifest.value.campaign_id)} to verify invocation preflight` });
+      else {
         const preflight = asObject(campaign.value.preflight), resolutions = preflight.harness_runtimes as unknown[];
         const matchesPreflight = resolutions.some((item) => { const resolution = asObject(item); return resolution.harness_family === harness.family
           && resolution.runtime_source === invocation.runtime_source

@@ -196,6 +196,7 @@ async function campaignRunFixture(): Promise<{ root: string; experiment: Record<
 
 async function runEvaluationFixture(): Promise<{ root: string; request: Record<string, any>; requestFile: string; result: Record<string, any>; resultFile: string; evaluation: Record<string, any>; evaluationFile: string }> {
   const fixture = await semanticFixture(); const task = fixture.task as Record<string, any>; const { experiment } = await addValidExperiment(fixture);
+  const campaign = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/campaign.example.json"), "utf8"));
   const request = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/run-request.example.json"), "utf8"));
   const result = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/run-result.example.json"), "utf8"));
   const evaluation = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/evaluation.example.json"), "utf8"));
@@ -203,7 +204,10 @@ async function runEvaluationFixture(): Promise<{ root: string; request: Record<s
   evaluation.task_id = "demo"; result.evaluation.result_artifact_digest = manifestDigest(evaluation);
   result.provenance.request_digest = manifestDigest(request);
   const runDirectory = join(fixture.root, "results", result.experiment.id, result.campaign_id, "runs", result.run_id); await mkdir(runDirectory, { recursive: true });
+  campaign.experiment = structuredClone(request.experiment); campaign.suite = structuredClone(request.suite); campaign.planned_run_count = 1; campaign.runs = []; campaign.summary = { recorded_runs: 0, operational_successes: 0, quality_eligible_runs: 0, end_to_end_passes: 0, invalid_runs: 0 };
+  const campaignFile = join(fixture.root, "results", result.experiment.id, result.campaign_id, "campaign.json");
   const requestFile = join(runDirectory, "request.json"), resultFile = join(runDirectory, "run.json"), evaluationFile = join(runDirectory, "evaluator.json"); await writeFile(requestFile, JSON.stringify(request)); await writeFile(resultFile, JSON.stringify(result)); await writeFile(evaluationFile, JSON.stringify(evaluation));
+  await writeFile(campaignFile, JSON.stringify(campaign));
   return { root: fixture.root, request, requestFile, result, resultFile, evaluation, evaluationFile };
 }
 
@@ -480,6 +484,12 @@ test("run invocation runtime fingerprints match campaign preflight", async () =>
     await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/campaign-preflight"));
     fixture.request.invocation[field] = original;
   }
+});
+
+test("run requests require their owning campaign preflight", async () => {
+  const fixture = await campaignRunFixture();
+  await unlink(fixture.campaignFile);
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/campaign-preflight" && item.message.includes(`requires campaign ${fixture.request.campaign_id}`)));
 });
 
 test("run request workspace fingerprints resolve against its task spec", async () => {
