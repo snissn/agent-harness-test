@@ -13,8 +13,8 @@ npm run validate
 `npm run validate` loads canonical checked-in JSON/YAML manifests under the
 repository layout plus all structural examples. Suite and experiment manifests
 must use their versioned canonical paths; task and result source manifests must
-use the complete canonical layouts defined in `SPEC.md`. JSON below result
-`reports/` directories is never inferred as a source manifest, even when its
+use the complete canonical layouts defined in `SPEC.md`. JSON files under any
+`reports/` directory are never inferred as source manifests, even when their
 name or nested directories resemble one. Validation rejects duplicate keys, YAML tags,
 anchors, aliases, merge keys, non-string mapping keys, non-JSON YAML values,
 unsafe/escaping paths, schema errors, and the implemented

@@ -26,7 +26,7 @@ function assertJsonSafeYaml(node: unknown): void {
   const yamlNode = node as { anchor?: unknown; tag?: unknown; value?: unknown };
   if (isAlias(node)) throw new Error("YAML aliases are forbidden");
   if (typeof yamlNode.anchor === "string") throw new Error("YAML anchors are forbidden");
-  if (typeof yamlNode.tag === "string" && yamlNode.tag.startsWith("!")) throw new Error("custom YAML tags are forbidden");
+  if (typeof yamlNode.tag === "string") throw new Error("explicit YAML tags are forbidden");
   if (isMap(node)) {
     for (const item of node.items) {
       if (!item.key || typeof (item.key as { value?: unknown }).value !== "string") throw new Error("YAML mapping keys must be strings");

@@ -102,7 +102,9 @@ export async function validateRepository(rootInput: string): Promise<void> {
   const diagnostics: Diagnostic[] = [];
   const manifests: Manifest[] = [];
   const exampleDirectory = join(root, "spec/examples");
-  const exampleFiles = await exists(exampleDirectory) ? (await readdir(exampleDirectory)).filter(isManifestPath).map((name) => join(exampleDirectory, name)) : [];
+  const exampleFiles = await exists(exampleDirectory)
+    ? (await readdir(exampleDirectory, { withFileTypes: true })).filter((entry) => entry.isFile() && isManifestPath(entry.name)).map((entry) => join(exampleDirectory, entry.name))
+    : [];
   const repoFiles = await taskManifests(join(root, "tasks"));
   for (const directory of ["suites", "experiments", "results"]) await walk(join(root, directory), repoFiles);
   for (const file of [...exampleFiles, ...repoFiles].sort()) {
@@ -189,6 +191,7 @@ export async function validateRepository(rootInput: string): Promise<void> {
       const checkIds = (asObject(manifest.value.scoring).checks as unknown[]).map((check) => asString(asObject(check).id));
       if (new Set(checkIds).size !== checkIds.length) diagnostics.push({ file: manifest.file, code: "semantic/check-ids", message: "task scoring check IDs must be unique" });
       const sourceKind = asString(source.kind);
+      if (sourceKind === "archive" && typeof source.path !== "string") throw new Error("URI-only archive sources cannot be verified against their declared archive digest");
       const optionalPaths = [typeof source.path === "string" ? source.path : undefined, typeof asObject(manifest.value.calibration ?? {}).evidence_path === "string" ? asString(asObject(manifest.value.calibration ?? {}).evidence_path) : undefined];
       if (sourceKind === "git") for (const patch of (source.patches as unknown[] | undefined) ?? []) optionalPaths.push(asString(asObject(patch).path));
       const paths = [asString(prompt.path), asString(evaluator.path), ...optionalPaths].filter((value): value is string => Boolean(value));
@@ -213,8 +216,8 @@ export async function validateRepository(rootInput: string): Promise<void> {
           const stateDirectory = await resolveSafe(root, asString(source.path));
           if (!await isDirectory(stateDirectory)) throw new Error("problem state must be a directory");
           const actualState = await treeDigest(stateDirectory); if (actualState !== asString(state.expected_tree_digest)) throw new Error(`problem-state digest mismatch: expected ${asString(state.expected_tree_digest)}, got ${actualState}`);
-        } else if (sourceKind === "archive" && typeof source.path === "string") {
-          const archive = await resolveSafe(root, source.path); const actual = `sha256:${sha256(await readFile(archive))}`;
+        } else if (sourceKind === "archive") {
+          const archive = await resolveSafe(root, asString(source.path)); const actual = `sha256:${sha256(await readFile(archive))}`;
           if (actual !== asString(source.archive_digest)) throw new Error(`archive digest mismatch: expected ${asString(source.archive_digest)}, got ${actual}`);
         } else if (sourceKind === "git") {
           for (const patch of (source.patches as unknown[] | undefined) ?? []) { const item = asObject(patch); const actual = `sha256:${sha256(await readFile(await resolveSafe(root, asString(item.path))))}`; if (actual !== asString(item.digest)) throw new Error(`patch digest mismatch for ${asString(item.path)}`); }

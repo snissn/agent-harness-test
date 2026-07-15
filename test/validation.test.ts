@@ -1,15 +1,16 @@
 import assert from "node:assert/strict";
-import { cp, mkdtemp, mkdir, readdir, symlink, unlink, writeFile, chmod, utimes } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, readdir, rm, symlink, unlink, writeFile, chmod, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { canonicalJson, manifestDigest, sha256, treeDigest } from "../src/digests.js";
 import { loadManifestText } from "../src/load.js";
 import { kindFromPath, kindFromRepositoryPath, SchemaValidator } from "../src/schema.js";
 import { safeRelativePath, validateRepository } from "../src/repository.js";
 import { ValidationError } from "../src/types.js";
 
-const root = new URL("..", import.meta.url).pathname;
+const root = fileURLToPath(new URL("..", import.meta.url));
 
 test("all seven checked-in examples are discoverable and schema-validated", async () => {
   const expected = ["task", "suite", "experiment", "campaign", "evaluation", "run-request", "run-result"];
@@ -31,6 +32,7 @@ test("loaders reject duplicate keys and forbidden YAML tags", () => {
   assert.throws(() => loadManifestText('{"id":"one","id":"two"}', "bad.json"), ValidationError);
   assert.throws(() => loadManifestText("id: one\nid: two\n", "bad.yaml"), ValidationError);
   assert.throws(() => loadManifestText("id: !custom one\n", "bad.yaml"), ValidationError);
+  assert.throws(() => loadManifestText("id: !<tag:example.test,2026:value> one\n", "bad.yaml"), ValidationError);
   assert.throws(() => loadManifestText("1: value\n", "bad.yaml"), ValidationError);
   assert.throws(() => loadManifestText("a: &value {x: one}\nb: *value\n", "bad.yaml"), ValidationError);
   assert.throws(() => loadManifestText("base: &base {x: one}\nvalue:\n  <<: *base\n", "bad.yaml"), ValidationError);
@@ -49,6 +51,32 @@ test("strict schemas reject unknown fields and incompatible versions", async () 
   const suite = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/suite.example.json"), "utf8")); suite.tasks[0].spec_path = "tasks\\example-cli\\1.0.0\\task.yaml";
   assert.throws(() => validator.validate("suite", suite, "bad-suite.json"), ValidationError);
   for (const path of ["C:/tasks/example/task.yaml", "tasks/example/\u0000/task.yaml"]) { suite.tasks[0].spec_path = path; assert.throws(() => validator.validate("suite", suite, "bad-suite.json"), ValidationError); }
+});
+
+test("repository paths and schemas enforce strict SemVer identifiers", async () => {
+  assert.equal(kindFromRepositoryPath("tasks/demo/1.0.0-alpha.1+build.01/task.yaml"), "task");
+  assert.equal(kindFromRepositoryPath("suites/demo/1.0.0-0.json"), "suite");
+  for (const version of ["1.0.0-alpha..1", "1.0.0-01", "1.0.0+build..1"]) assert.equal(kindFromRepositoryPath(`tasks/demo/${version}/task.yaml`), undefined);
+
+  const validator = await SchemaValidator.create(join(root, "spec/schemas"));
+  const task = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/task.example.json"), "utf8"));
+  validator.validate("task", { ...task, version: "1.0.0-0.alpha+build.01" }, "valid-task.json");
+  for (const version of ["1.0.0-alpha..1", "1.0.0-01", "1.0.0+build..1"]) assert.throws(() => validator.validate("task", { ...task, version }, "bad-task.json"), ValidationError);
+});
+
+test("example discovery ignores symlinks and non-regular manifest-like entries", async () => {
+  const fixture = await mkdtemp(join(tmpdir(), "aht-repo-"));
+  const external = await mkdtemp(join(tmpdir(), "aht-external-"));
+  try {
+    await cp(join(root, "spec/schemas"), join(fixture, "spec/schemas"), { recursive: true });
+    await mkdir(join(fixture, "spec/examples"), { recursive: true });
+    await writeFile(join(external, "invalid.json"), "{ invalid");
+    await symlink(join(external, "invalid.json"), join(fixture, "spec/examples/task.example.json"));
+    await mkdir(join(fixture, "spec/examples/suite.example.json"));
+    await validateRepository(fixture);
+  } finally {
+    await Promise.all([rm(fixture, { recursive: true, force: true }), rm(external, { recursive: true, force: true })]);
+  }
 });
 
 test("RFC 8785 canonical JSON and manifest digest have stable vectors", () => {
@@ -219,6 +247,13 @@ test("candidate git sources remain valid without pretending to materialize them"
   (fixture.task.problem_state as Record<string, unknown>).source = { kind: "git", repository: "https://example.test/demo.git", revision: "a".repeat(40) };
   await writeFile(fixture.taskFile, JSON.stringify(fixture.task));
   await validateRepository(fixture.root);
+});
+
+test("URI-only archive sources cannot bypass digest verification", async () => {
+  const fixture = await semanticFixture();
+  (fixture.task.problem_state as Record<string, unknown>).source = { kind: "archive", uri: "https://example.test/state.tar", archive_digest: `sha256:${"0".repeat(64)}` };
+  await writeFile(fixture.taskFile, JSON.stringify(fixture.task));
+  await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/task-artifact" && item.message.includes("URI-only archive sources")));
 });
 
 test("released and retired task calibration evidence is verified from its bytes", async () => {

@@ -12,7 +12,7 @@ const schemaByKind: Record<string, string> = {
 const require = createRequire(import.meta.url);
 const addFormats = require("ajv-formats") as (validator: Ajv2020) => void;
 const identifier = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
-const semver = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const semver = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const exampleKinds: Record<string, string> = {
   "task.example.json": "task", "suite.example.json": "suite", "experiment.example.json": "experiment",
   "campaign.example.json": "campaign", "evaluation.example.json": "evaluation", "run-request.example.json": "run-request", "run-result.example.json": "run-result"
