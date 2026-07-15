@@ -453,7 +453,7 @@ export async function validateRepository(rootInput: string): Promise<void> {
       && [...declaredChecks.entries()].every(([id, check]) => check.required !== true || evaluatorChecks.get(id)?.passed === true);
     const agentCompletionRequired = scoring.require_agent_completion === true;
     const agentCompleted = terminal.reason === "agent_completed" && terminal.attribution === "agent" && terminal.operational_success === true;
-    const endToEndPassed = criteriaPassed && (!agentCompletionRequired || agentCompleted);
+    const endToEndPassed = qualityEligible && criteriaPassed && (!agentCompletionRequired || agentCompleted);
     const derivedMatches = Math.abs((summary.artifact_quality_score as number) - artifactQualityScore) <= 1e-12
       && summary.criteria_passed === criteriaPassed
       && summary.agent_completion_required === agentCompletionRequired

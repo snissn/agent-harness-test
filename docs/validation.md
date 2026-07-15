@@ -45,7 +45,9 @@ attempt identities. Its resolved harness, requested model identity, effort,
 limits, and execution provenance must preserve the resolved request. Successful
 run results are also joined to their co-located
 `evaluator.json`: validation checks its manifest digest, evaluator/task identity,
-mirrored check results, scoring derivations, and end-to-end pass state. Finalized
+mirrored check results, scoring derivations, and end-to-end pass state. Only
+quality-eligible terminal outcomes can pass end to end; evaluator scores remain
+available for salvageable infrastructure and operator failures. Finalized
 campaign summaries are recomputed only after every unique run reference verifies.
 `recorded_runs` counts referenced results, `operational_successes` counts true
 `terminal.operational_success` values, and the quality-eligible and end-to-end

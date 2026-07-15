@@ -196,8 +196,10 @@ async function campaignRunFixture(taskNetwork?: Record<string, unknown>): Promis
   return { root: fixture.root, experiment, experimentFile, campaign, campaignFile, request, requestFile, result, resultFile };
 }
 
-async function runEvaluationFixture(): Promise<{ root: string; request: Record<string, any>; requestFile: string; result: Record<string, any>; resultFile: string; evaluation: Record<string, any>; evaluationFile: string }> {
-  const fixture = await semanticFixture(); const task = fixture.task as Record<string, any>; const { experiment } = await addValidExperiment(fixture);
+async function runEvaluationFixture(requireAgentCompletion = true): Promise<{ root: string; request: Record<string, any>; requestFile: string; result: Record<string, any>; resultFile: string; evaluation: Record<string, any>; evaluationFile: string }> {
+  const fixture = await semanticFixture(); const task = fixture.task as Record<string, any>;
+  if (!requireAgentCompletion) { task.scoring.require_agent_completion = false; await writeFile(fixture.taskFile, JSON.stringify(task)); }
+  const { experiment } = await addValidExperiment(fixture);
   const campaign = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/campaign.example.json"), "utf8"));
   const request = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/run-request.example.json"), "utf8"));
   const result = JSON.parse(await (await import("node:fs/promises")).readFile(join(root, "spec/examples/run-result.example.json"), "utf8"));
@@ -211,6 +213,15 @@ async function runEvaluationFixture(): Promise<{ root: string; request: Record<s
   const requestFile = join(runDirectory, "request.json"), resultFile = join(runDirectory, "run.json"), evaluationFile = join(runDirectory, "evaluator.json"); await writeFile(requestFile, JSON.stringify(request)); await writeFile(resultFile, JSON.stringify(result)); await writeFile(evaluationFile, JSON.stringify(evaluation));
   await writeFile(campaignFile, JSON.stringify(campaign));
   return { root: fixture.root, request, requestFile, result, resultFile, evaluation, evaluationFile };
+}
+
+async function passingRunEvaluationFixture(requireAgentCompletion = true): Promise<Awaited<ReturnType<typeof runEvaluationFixture>>> {
+  const fixture = await runEvaluationFixture(requireAgentCompletion);
+  fixture.evaluation.checks[1].score = 1; fixture.evaluation.checks[1].passed = true;
+  fixture.result.evaluation.result_artifact_digest = manifestDigest(fixture.evaluation); fixture.result.evaluation.checks[1].score = 1; fixture.result.evaluation.checks[1].passed = true;
+  fixture.result.evaluation.artifact_quality_score = 1; fixture.result.evaluation.criteria_passed = true; fixture.result.evaluation.agent_completion_required = requireAgentCompletion; fixture.result.evaluation.end_to_end_passed = true;
+  await writeFile(fixture.evaluationFile, JSON.stringify(fixture.evaluation)); await writeFile(fixture.resultFile, JSON.stringify(fixture.result));
+  return fixture;
 }
 
 async function setTaskLifecycle(fixture: { root: string; taskFile: string; task: Record<string, any> }, status: "draft" | "candidate" | "released" | "retired"): Promise<void> {
@@ -639,9 +650,37 @@ test("run evaluation checks mirror evaluator scores and pass states", async () =
 });
 
 test("run end-to-end pass state is derived from evaluation, task policy, and terminal state", async () => {
-  const fixture = await runEvaluationFixture(); fixture.evaluation.checks[1].score = 1; fixture.evaluation.checks[1].passed = true; fixture.result.evaluation.result_artifact_digest = manifestDigest(fixture.evaluation); fixture.result.evaluation.checks[1].score = 1; fixture.result.evaluation.checks[1].passed = true; fixture.result.evaluation.artifact_quality_score = 1; fixture.result.evaluation.criteria_passed = true; fixture.result.evaluation.end_to_end_passed = true; await writeFile(fixture.evaluationFile, JSON.stringify(fixture.evaluation)); await writeFile(fixture.resultFile, JSON.stringify(fixture.result)); await validateRepository(fixture.root);
+  const fixture = await passingRunEvaluationFixture(); await validateRepository(fixture.root);
   fixture.result.terminal.reason = "wall_time_exhausted"; fixture.result.terminal.operational_success = false; await writeFile(fixture.resultFile, JSON.stringify(fixture.result));
   await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-evaluation-summary"));
+});
+
+test("end-to-end passes require quality-eligible terminal outcomes", async () => {
+  const terminals = [
+    { reason: "provider_error", attribution: "provider", operational_success: false },
+    { reason: "environment_error", attribution: "environment", operational_success: false },
+    { reason: "cancelled", attribution: "operator", operational_success: false }
+  ];
+  for (const terminal of terminals) {
+    const fixture = await passingRunEvaluationFixture(false); fixture.result.terminal = terminal; fixture.result.evaluation.eligible_for_quality_aggregate = false; await writeFile(fixture.resultFile, JSON.stringify(fixture.result));
+    await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-evaluation-summary"));
+    assert.equal(fixture.result.evaluation.artifact_quality_score, 1); assert.equal(fixture.result.evaluation.criteria_passed, true);
+    fixture.result.evaluation.end_to_end_passed = false; await writeFile(fixture.resultFile, JSON.stringify(fixture.result)); await validateRepository(fixture.root);
+  }
+
+  const scorable = await passingRunEvaluationFixture(false); scorable.result.terminal = { reason: "wall_time_exhausted", attribution: "runner", operational_success: false }; await writeFile(scorable.resultFile, JSON.stringify(scorable.result));
+  await validateRepository(scorable.root);
+});
+
+test("operator retry and resume attempts cannot count as end-to-end passes", async () => {
+  for (const mode of ["retry", "resume"]) {
+    const fixture = await passingRunEvaluationFixture();
+    const attempt = { number: 2, mode, initiated_by: "operator", parent_run_id: "01J00000000000000000000001", reason: `operator ${mode}` };
+    fixture.request.attempt = structuredClone(attempt); fixture.result.attempt = structuredClone(attempt); fixture.result.provenance.request_digest = manifestDigest(fixture.request); fixture.result.evaluation.eligible_for_quality_aggregate = false;
+    await writeFile(fixture.requestFile, JSON.stringify(fixture.request)); await writeFile(fixture.resultFile, JSON.stringify(fixture.result));
+    await assert.rejects(validateRepository(fixture.root), (error: unknown) => error instanceof ValidationError && error.diagnostics.some((item) => item.code === "semantic/run-evaluation-summary"));
+    fixture.result.evaluation.end_to_end_passed = false; await writeFile(fixture.resultFile, JSON.stringify(fixture.result)); await validateRepository(fixture.root);
+  }
 });
 
 test("noncanonical result reports are ignored even with exact names or canonical-looking directories", async () => {
