@@ -140,9 +140,12 @@ export async function validateRepository(rootInput: string): Promise<void> {
     const campaignDirectory = relative(root, dirname(campaign.file)).split(sep).join("/");
     const campaignId = asString(campaign.value.campaign_id), campaignExperiment = asObject(campaign.value.experiment), campaignSuite = asObject(campaign.value.suite);
     const referencedRuns: Manifest[] = [];
+    const referencedRunIds = new Set<string>(), referencedRunPaths = new Set<string>();
     let referencesValid = true;
     for (const item of campaign.value.runs as unknown[]) {
       const reference = asObject(item), runId = asString(reference.run_id), path = asString(reference.path);
+      if (referencedRunIds.has(runId) || referencedRunPaths.has(path)) { diagnostics.push({ file: campaign.file, code: "semantic/duplicate-run-reference", message: `duplicate campaign run reference ${runId}` }); referencesValid = false; }
+      else { referencedRunIds.add(runId); referencedRunPaths.add(path); }
       const expectedPath = `runs/${runId}/run.json`;
       if (!safeRelativePath(path) || path !== expectedPath) {
         diagnostics.push({ file: campaign.file, code: "semantic/campaign-run-path", message: `campaign run ${runId} must use canonical path ${expectedPath}` });
@@ -244,7 +247,9 @@ export async function validateRepository(rootInput: string): Promise<void> {
       }
     }
   }
+  const experimentByIdentity = new Map<string, Manifest>();
   for (const experiment of repositoryManifests.filter((item) => item.kind === "experiment")) {
+    experimentByIdentity.set(`${asString(experiment.value.id)}@${asString(experiment.value.version)}`, experiment);
     const configurationIds = (experiment.value.configurations as unknown[]).map((configuration) => asString(asObject(configuration).id));
     const declaredConfigurations = new Set<string>();
     for (const configurationId of configurationIds) {
@@ -272,6 +277,62 @@ export async function validateRepository(rootInput: string): Promise<void> {
         for (const selectedId of selectedIds.map(asString)) if (!suiteTaskIds.has(selectedId)) diagnostics.push({ file: experiment.file, code: "semantic/task-selection", message: `task_selection references task ID not present in suite: ${selectedId}` });
       }
     }
+  }
+  function validateSpecReference(owner: Manifest, reference: ObjectValue, kind: "experiment" | "suite" | "task", targets: Map<string, Manifest>): Manifest | undefined {
+    const id = asString(reference.id), version = asString(reference.version), target = targets.get(`${id}@${version}`);
+    if (!target) { diagnostics.push({ file: owner.file, code: `semantic/${kind}-reference`, message: `missing ${kind} ${id}@${version}` }); return undefined; }
+    const path = asString(reference.spec_path);
+    if (!safeRelativePath(path) || resolve(root, path) !== resolve(target.file)) diagnostics.push({ file: owner.file, code: `semantic/${kind}-path`, message: `${kind} spec_path does not resolve to ${id}@${version}` });
+    if (asString(reference.spec_digest) !== manifestDigest(target.value)) diagnostics.push({ file: owner.file, code: `semantic/${kind}-digest`, message: `${kind} digest mismatch for ${id}@${version}` });
+    return target;
+  }
+  function validateTaskFingerprints(owner: Manifest, reference: ObjectValue, task: Manifest): void {
+    try {
+      const prompt = asObject(task.value.prompt), state = asObject(task.value.problem_state), evaluator = asObject(task.value.evaluator);
+      const matching = asString(reference.prompt_digest) === asString(prompt.digest)
+        && asString(reference.initial_tree_digest) === asString(state.expected_tree_digest)
+        && asString(reference.evaluator_digest) === asString(evaluator.digest);
+      if (!matching) diagnostics.push({ file: owner.file, code: "semantic/task-fingerprint", message: `task artifact fingerprints do not match ${asString(reference.id)}@${asString(reference.version)}` });
+    } catch (error) { diagnostics.push({ file: owner.file, code: "semantic/task-fingerprint", message: error instanceof Error ? error.message : String(error) }); }
+  }
+  for (const campaign of repositoryManifests.filter((manifest) => manifest.kind === "campaign")) {
+    validateSpecReference(campaign, asObject(campaign.value.experiment), "experiment", experimentByIdentity);
+    validateSpecReference(campaign, asObject(campaign.value.suite), "suite", suiteByIdentity);
+  }
+  for (const manifest of repositoryManifests.filter((item) => item.kind === "run-request" || item.kind === "run-result")) {
+    validateSpecReference(manifest, asObject(manifest.value.experiment), "experiment", experimentByIdentity);
+    validateSpecReference(manifest, asObject(manifest.value.suite), "suite", suiteByIdentity);
+    const taskReference = asObject(manifest.value.task), task = validateSpecReference(manifest, taskReference, "task", taskByIdentity);
+    if (task) {
+      validateTaskFingerprints(manifest, taskReference, task);
+      if (manifest.kind === "run-request") {
+        try {
+          const workspace = asObject(manifest.value.workspace), prompt = asObject(task.value.prompt), state = asObject(task.value.problem_state);
+          const workspaceMatches = asString(workspace.prompt_path) === asString(prompt.path)
+            && asString(workspace.prompt_digest) === asString(prompt.digest)
+            && asString(workspace.initial_tree_digest) === asString(state.expected_tree_digest);
+          if (!workspaceMatches) diagnostics.push({ file: manifest.file, code: "semantic/workspace-fingerprint", message: "run request workspace fingerprints do not match TaskSpec" });
+        } catch (error) { diagnostics.push({ file: manifest.file, code: "semantic/workspace-fingerprint", message: error instanceof Error ? error.message : String(error) }); }
+      }
+    }
+  }
+  const runRequestsByFile = new Map(repositoryManifests.filter((manifest) => manifest.kind === "run-request").map((manifest) => [resolve(manifest.file), manifest]));
+  for (const run of repositoryManifests.filter((manifest) => manifest.kind === "run-result")) {
+    const request = runRequestsByFile.get(resolve(dirname(run.file), "request.json"));
+    if (!request) { diagnostics.push({ file: run.file, code: "semantic/run-request-reference", message: "run result requires a co-located request.json" }); continue; }
+    const provenance = asObject(run.value.provenance);
+    if (asString(provenance.request_digest) !== manifestDigest(request.value)) diagnostics.push({ file: run.file, code: "semantic/run-request-digest", message: "run result request_digest does not match request.json" });
+    const requestConfiguration = asObject(request.value.configuration);
+    const identityMatches = asString(run.value.run_id) === asString(request.value.run_id)
+      && asString(run.value.campaign_id) === asString(request.value.campaign_id)
+      && manifestDigest(run.value.experiment) === manifestDigest(request.value.experiment)
+      && manifestDigest(run.value.suite) === manifestDigest(request.value.suite)
+      && manifestDigest(run.value.task) === manifestDigest(request.value.task)
+      && asString(run.value.configuration_id) === asString(requestConfiguration.id)
+      && run.value.repetition === request.value.repetition
+      && run.value.schedule_index === request.value.schedule_index
+      && manifestDigest(run.value.attempt) === manifestDigest(request.value.attempt);
+    if (!identityMatches) diagnostics.push({ file: run.file, code: "semantic/run-request-identity", message: "run result identity does not match request.json" });
   }
   for (const evaluation of repositoryManifests.filter((item) => item.kind === "evaluation")) {
     const task = taskByIdentity.get(`${asString(evaluation.value.task_id)}@${asString(evaluation.value.task_version)}`);

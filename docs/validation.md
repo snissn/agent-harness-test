@@ -28,10 +28,16 @@ Task authors should add a failing fixture/test first, update `SPEC.md` and its
 schema before using a new concept, then add the valid manifest/artifacts and
 digest expectations. Candidate/released tasks must have co-located state and
 evaluator trees; released suites reference released tasks and their RFC 8785
-manifest digests. Successful run results are joined to their co-located
+manifest digests. Campaign, run-request, and run-result experiment/suite/task
+references must resolve the exact loaded manifest path and digest. Run task
+references also pin the TaskSpec prompt, initial-state, and evaluator digests;
+run-request workspace fingerprints must agree with the same TaskSpec. Every run
+result is joined to its co-located `request.json` by canonical digest and shared
+run, campaign, experiment, suite, task, configuration, repetition, schedule, and
+attempt identities. Successful run results are also joined to their co-located
 `evaluator.json`: validation checks its manifest digest, evaluator/task identity,
 mirrored check results, scoring derivations, and end-to-end pass state. Finalized
-campaign summaries are recomputed only after every run reference verifies.
+campaign summaries are recomputed only after every unique run reference verifies.
 `recorded_runs` counts referenced results, `operational_successes` counts true
 `terminal.operational_success` values, and the quality-eligible and end-to-end
 counters use their corresponding run evaluation booleans. Per SPEC section
