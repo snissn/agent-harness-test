@@ -77,6 +77,7 @@ if (command === "inspect") {
     },
     taskChecks: [{ id: "fixture", weight: 1, required: true }],
     runnerGitCommit,
+    actualExecution: request.execution,
   });
   console.log(
     JSON.stringify({ run_id: result.run_id, terminal: result.terminal.reason }),
@@ -120,6 +121,7 @@ if (command === "inspect") {
     },
     taskChecks: [{ id: "fixture", weight: 1, required: true }],
     runnerGitCommit,
+    actualExecution: request.execution,
   });
   console.log(
     JSON.stringify({ run_id: result.run_id, terminal: result.terminal.reason }),

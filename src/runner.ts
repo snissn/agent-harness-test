@@ -5,6 +5,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  readlink,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -110,6 +111,12 @@ export interface HarnessAdapter {
     prompt: string;
     request: Record<string, unknown>;
     signal: AbortSignal;
+    capture?: {
+      event: (event: unknown) => void;
+      stdout: (chunk: string) => void;
+      stderr: (chunk: string) => void;
+      finalMessage: (message: string) => void;
+    };
   }): Promise<HarnessResult>;
 }
 /** A process adapter must kill its child/process group here. Abort alone is only cooperative. */
@@ -134,10 +141,19 @@ export async function runWithHardTimeout(
 ): Promise<HarnessResult> {
   const controller = new AbortController();
   let settled = false;
+  let timerHandle: unknown;
+  let timerCleared = false;
+  const clearTimer = () => {
+    if (!timerCleared && timerHandle !== undefined) {
+      timerCleared = true;
+      timer.clear(timerHandle);
+    }
+  };
   const run = adapter.run({ ...input, signal: controller.signal });
   const timedOut = new Promise<HarnessResult>((resolve) => {
     const fire = async () => {
       if (settled) return;
+      clearTimer();
       controller.abort();
       await adapter.terminate?.("wall_time_exhausted");
       if (!settled) {
@@ -150,8 +166,8 @@ export async function runWithHardTimeout(
         });
       }
     };
-    const handle = timer.set(timeoutMs, () => void fire());
-    run.finally(() => timer.clear(handle)).catch(() => undefined);
+    timerHandle = timer.set(timeoutMs, () => void fire());
+    run.finally(clearTimer).catch(() => undefined);
   });
   try {
     const result = await Promise.race([run, timedOut]);
@@ -317,11 +333,12 @@ async function treeManifest(
         output.push({
           type: "file",
           path: name,
+          mode: ((await lstat(path)).mode & 0o111) !== 0 ? "executable" : "regular",
           bytes: (await lstat(path)).size,
           digest: `sha256:${sha256(await readFile(path))}`,
         });
       else if (entry.isSymbolicLink())
-        output.push({ type: "symlink", path: name });
+        output.push({ type: "symlink", path: name, target: await readlink(path) });
     }
   }
   await walk(root);
@@ -549,6 +566,10 @@ export class DeterministicRunner {
       "runs",
       String(request.run_id),
     );
+    // The adapter only ever receives this disposable path. On capture it is
+    // copied into the durable workspace evidence path, so a non-cooperative
+    // process cannot mutate finalized evidence after a hard timeout.
+    const activeWorkspace = join(root, ".agent-workspace");
     const workspace = join(root, "workspace");
     const within = (path: string) =>
       path === root || path.startsWith(`${root}/`);
@@ -581,6 +602,12 @@ export class DeterministicRunner {
       reason: "no salvageable workspace",
       eligible_for_quality_aggregate: false,
     };
+    const captured = {
+      events: [] as unknown[],
+      stdout: [] as string[],
+      stderr: [] as string[],
+      finalMessage: [] as string[],
+    };
     const phase = async <T>(name: string, fn: () => Promise<T>): Promise<T> => {
       const at = performance.now();
       try {
@@ -610,11 +637,12 @@ export class DeterministicRunner {
       });
     try {
       await phase("materialization", async () => {
-        await cp(o.stateSource, workspace, {
+        await cp(o.stateSource, activeWorkspace, {
           recursive: true,
           errorOnExist: true,
+          verbatimSymlinks: true,
         });
-        post = await treeDigest(workspace);
+        post = await treeDigest(activeWorkspace);
         if (
           post !== (request.workspace as any).initial_tree_digest ||
           post !== (request.task as any).initial_tree_digest
@@ -624,7 +652,7 @@ export class DeterministicRunner {
             "initial state digest mismatch",
             "environment",
           );
-        initialBytes = await workspaceBytes(workspace);
+        initialBytes = await workspaceBytes(activeWorkspace);
       });
       state.transition("materialized");
       state.transition("running");
@@ -632,10 +660,16 @@ export class DeterministicRunner {
         runWithHardTimeout(
           o.adapter,
           {
-            workspace,
+            workspace: activeWorkspace,
             prompt: o.prompt,
             request,
             signal: new AbortController().signal,
+            capture: {
+              event: (event) => captured.events.push(event),
+              stdout: (chunk) => captured.stdout.push(chunk),
+              stderr: (chunk) => captured.stderr.push(chunk),
+              finalMessage: (message) => captured.finalMessage.push(message),
+            },
           },
           Number(
             (request.configuration as any).limits.wall_time_seconds.value,
@@ -675,15 +709,29 @@ export class DeterministicRunner {
         r.code,
       );
     }
+    // Snapshot before writing any final evidence. The active workspace is then
+    // removed; a late, non-cooperative adapter can only recreate that disposable
+    // path and cannot alter the retained workspace or its digest.
+    if (await exists(activeWorkspace)) {
+      await phase("snapshot", async () => {
+        await cp(activeWorkspace, workspace, { recursive: true, errorOnExist: true, verbatimSymlinks: true });
+        await rm(activeWorkspace, { recursive: true, force: true });
+      });
+    }
     const write = async (name: keyof typeof target, text: string) =>
       atomicWrite(join(root, target[name]!), redact(text, secrets));
     await write(
       "native_events",
-      (harness?.events ?? []).map((event) => JSON.stringify(event)).join("\n"),
+      [...captured.events, ...(harness?.events ?? [])]
+        .map((event) => JSON.stringify(event))
+        .join("\n"),
     );
-    await write("stdout", harness?.stdout ?? "");
-    await write("stderr", harness?.stderr ?? "");
-    await write("final_message", harness?.finalMessage ?? "");
+    await write("stdout", [...captured.stdout, harness?.stdout ?? ""].join(""));
+    await write("stderr", [...captured.stderr, harness?.stderr ?? ""].join(""));
+    await write(
+      "final_message",
+      [...captured.finalMessage, harness?.finalMessage ?? ""].join(""),
+    );
     if (await exists(workspace)) {
       const initialManifest = await treeManifest(o.stateSource);
       const finalManifest = await phase("snapshot", () =>
@@ -700,7 +748,7 @@ export class DeterministicRunner {
       );
       const protectedWorkspace = join(root, ".evaluator-workspace");
       try {
-        await cp(workspace, protectedWorkspace, { recursive: true });
+        await cp(workspace, protectedWorkspace, { recursive: true, verbatimSymlinks: true });
         const raw = await phase("evaluation", () =>
           o.evaluator.evaluate({ workspace: protectedWorkspace, request }),
         );
