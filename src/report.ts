@@ -39,10 +39,12 @@ CREATE TABLE lineage (run_id TEXT, parent_run_id TEXT, attempt_mode TEXT);`);
   db.exec("BEGIN IMMEDIATE");
   const errors: Json[] = [], rows: Json[] = [];
   const taskMetadata = new Map<string, Json>();
+  const experimentMetadata = new Map<string, Json>();
+  for (const path of (await files(join(root, "experiments"))).filter(path => path.endsWith(".json"))) { const experiment = await json(path); validator.validate("experiment", experiment, path); experimentMetadata.set(`${experiment.id}@${experiment.version}`, experiment); }
   for (const path of (await files(join(root, "tasks"))).filter(path => /\/task\.json$/.test(path))) { const task = await json(path); taskMetadata.set(`${task.id}@${task.version}`, task); }
   for (const campaignPath of campaignFiles) {
     let campaign: Json;
-    try { campaign = await json(campaignPath); validator.validate("campaign", campaign, campaignPath); }
+    try { campaign = await json(campaignPath); validator.validate("campaign", campaign, campaignPath); const experiment = experimentMetadata.get(`${campaign.experiment.id}@${campaign.experiment.version}`); if (!experiment || manifestDigest(experiment) !== campaign.experiment.spec_digest) throw new Error("campaign experiment reference/digest is invalid"); }
     catch (error) { errors.push({ source: relative(root, campaignPath), code: "invalid-campaign", message: String(error).replaceAll(root, "[REPOSITORY]") }); continue; }
     const campaignDir = resolve(campaignPath, "..");
     db.prepare("INSERT INTO campaigns VALUES (?, ?, ?, ?, ?)").run(campaign.campaign_id, campaign.observed_at, campaign.mode, `${campaign.suite.id}@${campaign.suite.version}`, campaign.status);

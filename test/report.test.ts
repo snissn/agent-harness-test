@@ -8,7 +8,7 @@ import { rebuildReport } from "../src/report.js";
 const source = resolve(import.meta.dirname, "..");
 async function fixture(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "agent-harness-report-"));
-  for (const path of ["spec", "tasks"]) await cp(join(source, path), join(root, path), { recursive: true });
+  for (const path of ["spec", "tasks", "experiments"]) await cp(join(source, path), join(root, path), { recursive: true });
   await cp(join(source, "results/codex-text-report-smoke/2026-07-15-codex-text-report-smoke"), join(root, "results/codex-text-report-smoke/2026-07-15-codex-text-report-smoke"), { recursive: true });
   return root;
 }
