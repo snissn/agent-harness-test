@@ -20,7 +20,7 @@ async function score(variant: "broken" | "partial" | "good") {
     await exec("python3", [evaluator, workspace]);
     const evaluation = JSON.parse(await readFile(join(workspace, "evaluator.json"), "utf8"));
     const weights: Record<string, number> = { "summary-output": .6, "filters-and-order": .25, "input-errors": .15 };
-    return { ...evaluation, duration_ms: 0, started_at: "", finished_at: "", score: evaluation.checks.reduce((sum: number, check: { id: string; score: number }) => sum + weights[check.id] * check.score, 0), passed: evaluation.checks.every((check: { id: string; passed: boolean }, index: number) => index !== 0 || check.passed) && evaluation.checks.reduce((sum: number, check: { id: string; score: number }) => sum + weights[check.id] * check.score, 0) >= .85 };
+    return { ...evaluation, duration_ms: 0, started_at: "", finished_at: "", score: evaluation.checks.reduce((sum: number, check: { id: string; score: number }) => sum + weights[check.id]! * check.score, 0), passed: evaluation.checks.every((check: { id: string; passed: boolean }, index: number) => index !== 0 || check.passed) && evaluation.checks.reduce((sum: number, check: { id: string; score: number }) => sum + weights[check.id]! * check.score, 0) >= .85 };
   } finally { await rm(workspace, { recursive: true, force: true }); }
 }
 
