@@ -6,6 +6,11 @@ on:
       - tmp/qft0l-public-toolchain-bootstrap-20260808
     paths:
       - .github/workflows/qft0l-public-toolchain-bootstrap.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/qft0l-public-toolchain-bootstrap.yml
   workflow_dispatch:
 
 permissions:
