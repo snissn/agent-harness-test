@@ -1,0 +1,322 @@
+name: QFT0-L public Lean bootstrap
+
+on:
+  push:
+    branches:
+      - codex/issue-3-runner
+    paths:
+      - .github/workflows/qft0l-public-bootstrap.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: qft0l-public-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      LEAN_VERSION: v4.22.0-rc2
+      LEAN_ARCHIVE: lean-4.22.0-rc2-linux.tar.zst
+      LEAN_SHA256: 73223e5077a2c691389c79900306c520d3f98d03bfffcf4590a7100e59e42c3a
+      MATHLIB_REV: e7c314d39b3d4c512bc4eb66eab008e6c51ceaa6
+      CHUNK_BYTES: 300M
+    steps:
+      - name: Check out helper branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+
+      - name: Download and verify exact Lean release
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/qft0l-bootstrap"
+          mkdir -p "$work/toolchain" "$work/project" "$work/out" "$work/cache"
+          echo "BOOTSTRAP_WORK=$work" >> "$GITHUB_ENV"
+          url="https://releases.lean-lang.org/lean4/${LEAN_VERSION}/${LEAN_ARCHIVE}"
+          curl --fail --location --retry 5 --retry-all-errors \
+            --output "$work/toolchain/$LEAN_ARCHIVE" "$url"
+          printf '%s  %s\n' "$LEAN_SHA256" "$work/toolchain/$LEAN_ARCHIVE" \
+            | sha256sum --check --strict
+          tar --zstd -xf "$work/toolchain/$LEAN_ARCHIVE" -C "$work/toolchain"
+          root="$(find "$work/toolchain" -mindepth 1 -maxdepth 1 -type d -name 'lean-*' -print -quit)"
+          test -n "$root"
+          echo "LEAN_ROOT=$root" >> "$GITHUB_ENV"
+          "$root/bin/lean" --version
+          "$root/bin/lake" --version
+
+      - name: Resolve exact Mathlib graph and download cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$LEAN_ROOT/bin:$PATH"
+          project="$BOOTSTRAP_WORK/project"
+          cat > "$project/lean-toolchain" <<'EOF'
+          leanprover/lean4:v4.22.0-rc2
+          EOF
+          cat > "$project/lakefile.lean" <<'EOF'
+          import Lake
+          open Lake DSL
+          package qft0l_public_bootstrap where
+            version := v!"0.1.0"
+          require mathlib from git
+            "https://github.com/leanprover-community/mathlib4" @
+            "e7c314d39b3d4c512bc4eb66eab008e6c51ceaa6"
+          lean_lib Bootstrap
+          EOF
+          cat > "$project/Bootstrap.lean" <<'EOF'
+          import Mathlib
+          EOF
+          cd "$project"
+          export MATHLIB_CACHE_DIR="$BOOTSTRAP_WORK/cache"
+          lake update
+          test "$(git -C .lake/packages/mathlib rev-parse HEAD)" = "$MATHLIB_REV"
+          lake exe cache get
+          lake build Bootstrap
+          cp lake-manifest.json "$BOOTSTRAP_WORK/out/lake-manifest.json"
+          find .lake/packages -mindepth 1 -maxdepth 1 -type d -print0 \
+            | sort -z \
+            | while IFS= read -r -d '' package; do
+                name="$(basename "$package")"
+                url="$(git -C "$package" remote get-url origin)"
+                rev="$(git -C "$package" rev-parse HEAD)"
+                printf '%s\t%s\t%s\n' "$name" "$url" "$rev"
+              done > "$BOOTSTRAP_WORK/out/package-origins.tsv"
+          lean --version > "$BOOTSTRAP_WORK/out/lean-version.txt"
+          lake --version > "$BOOTSTRAP_WORK/out/lake-version.txt"
+
+      - name: Package public source mirrors and cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          project="$BOOTSTRAP_WORK/project"
+          out="$BOOTSTRAP_WORK/out"
+          # Preserve package Git repositories but remove generated build output.
+          find "$project/.lake/packages" -type d -path '*/.lake/build' -prune \
+            -exec rm -rf {} +
+          tar --zstd -cf "$out/package-sources.tar.zst" \
+            -C "$project" .lake/packages
+          tar -cf "$out/mathlib-cache.tar" -C "$BOOTSTRAP_WORK/cache" .
+          split -b "$CHUNK_BYTES" -d -a 2 \
+            "$out/package-sources.tar.zst" "$out/package-sources.part."
+          split -b "$CHUNK_BYTES" -d -a 2 \
+            "$out/mathlib-cache.tar" "$out/mathlib-cache.part."
+          split -b "$CHUNK_BYTES" -d -a 2 \
+            "$BOOTSTRAP_WORK/toolchain/$LEAN_ARCHIVE" "$out/lean-toolchain.part."
+          rm -f "$out/package-sources.tar.zst" "$out/mathlib-cache.tar"
+          (
+            cd "$out"
+            sha256sum lean-toolchain.part.* package-sources.part.* \
+              mathlib-cache.part.* lake-manifest.json package-origins.tsv \
+              lean-version.txt lake-version.txt > SHA256SUMS
+          )
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          out = Path(os.environ['BOOTSTRAP_WORK']) / 'out'
+          def parts(prefix):
+              return [p.name for p in sorted(out.glob(prefix + '*'))]
+          receipt = {
+              'schema': 'qft0l-public-bootstrap-v1',
+              'run_id': int(os.environ['GITHUB_RUN_ID']),
+              'run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
+              'helper_head': os.environ['GITHUB_SHA'],
+              'lean_version': os.environ['LEAN_VERSION'],
+              'lean_sha256': os.environ['LEAN_SHA256'],
+              'mathlib_rev': os.environ['MATHLIB_REV'],
+              'toolchain_parts': parts('lean-toolchain.part.'),
+              'package_source_parts': parts('package-sources.part.'),
+              'cache_parts': parts('mathlib-cache.part.'),
+          }
+          (out / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          PY
+          ls -lh "$out"
+
+      - name: Commit bootstrap receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .qft0l-bootstrap
+          cp "$BOOTSTRAP_WORK/out/receipt.json" .qft0l-bootstrap/receipt.json
+          cp "$BOOTSTRAP_WORK/out/SHA256SUMS" .qft0l-bootstrap/SHA256SUMS
+          cp "$BOOTSTRAP_WORK/out/package-origins.tsv" .qft0l-bootstrap/package-origins.tsv
+          cp "$BOOTSTRAP_WORK/out/lake-manifest.json" .qft0l-bootstrap/lake-manifest.json
+          git config user.name qft0l-public-bootstrap
+          git config user.email qft0l-public-bootstrap@users.noreply.github.com
+          git add .qft0l-bootstrap
+          git commit -m "chore: record QFT0-L public bootstrap receipt"
+          git push origin HEAD:codex/issue-3-runner
+
+      - name: Upload bootstrap index
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-bootstrap-index-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/qft0l-bootstrap/out/receipt.json
+            ${{ runner.temp }}/qft0l-bootstrap/out/SHA256SUMS
+            ${{ runner.temp }}/qft0l-bootstrap/out/lake-manifest.json
+            ${{ runner.temp }}/qft0l-bootstrap/out/package-origins.tsv
+            ${{ runner.temp }}/qft0l-bootstrap/out/lean-version.txt
+            ${{ runner.temp }}/qft0l-bootstrap/out/lake-version.txt
+          retention-days: 3
+
+      - name: Upload Lean toolchain part 00
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-lean-00-${{ github.run_id }}
+          path: ${{ runner.temp }}/qft0l-bootstrap/out/lean-toolchain.part.00
+          if-no-files-found: error
+          retention-days: 3
+      - name: Upload Lean toolchain part 01
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-lean-01-${{ github.run_id }}
+          path: ${{ runner.temp }}/qft0l-bootstrap/out/lean-toolchain.part.01
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Upload package sources part 00
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-packages-00-${{ github.run_id }}
+          path: ${{ runner.temp }}/qft0l-bootstrap/out/package-sources.part.00
+          if-no-files-found: error
+          retention-days: 3
+      - name: Upload package sources part 01
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-packages-01-${{ github.run_id }}
+          path: ${{ runner.temp }}/qft0l-bootstrap/out/package-sources.part.01
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Upload package sources part 02
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-packages-02-${{ github.run_id }}
+          path: ${{ runner.temp }}/qft0l-bootstrap/out/package-sources.part.02
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Upload package sources part 03
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-packages-03-${{ github.run_id }}
+          path: ${{ runner.temp }}/qft0l-bootstrap/out/package-sources.part.03
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Upload Mathlib cache part 00
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-cache-00-${{ github.run_id }}
+          path: ${{ runner.temp }}/qft0l-bootstrap/out/mathlib-cache.part.00
+          if-no-files-found: error
+          retention-days: 3
+      - name: Upload Mathlib cache part 01
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-cache-01-${{ github.run_id }}
+          path: ${{ runner.temp }}/qft0l-bootstrap/out/mathlib-cache.part.01
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Upload Mathlib cache part 02
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-cache-02-${{ github.run_id }}
+          path: ${{ runner.temp }}/qft0l-bootstrap/out/mathlib-cache.part.02
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Upload Mathlib cache part 03
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-cache-03-${{ github.run_id }}
+          path: ${{ runner.temp }}/qft0l-bootstrap/out/mathlib-cache.part.03
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Upload Mathlib cache part 04
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-cache-04-${{ github.run_id }}
+          path: ${{ runner.temp }}/qft0l-bootstrap/out/mathlib-cache.part.04
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Upload Mathlib cache part 05
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-cache-05-${{ github.run_id }}
+          path: ${{ runner.temp }}/qft0l-bootstrap/out/mathlib-cache.part.05
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Upload Mathlib cache part 06
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-cache-06-${{ github.run_id }}
+          path: ${{ runner.temp }}/qft0l-bootstrap/out/mathlib-cache.part.06
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Upload Mathlib cache part 07
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-cache-07-${{ github.run_id }}
+          path: ${{ runner.temp }}/qft0l-bootstrap/out/mathlib-cache.part.07
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Upload Mathlib cache part 08
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-cache-08-${{ github.run_id }}
+          path: ${{ runner.temp }}/qft0l-bootstrap/out/mathlib-cache.part.08
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Upload Mathlib cache part 09
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-cache-09-${{ github.run_id }}
+          path: ${{ runner.temp }}/qft0l-bootstrap/out/mathlib-cache.part.09
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Upload Mathlib cache part 10
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-cache-10-${{ github.run_id }}
+          path: ${{ runner.temp }}/qft0l-bootstrap/out/mathlib-cache.part.10
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Upload Mathlib cache part 11
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-cache-11-${{ github.run_id }}
+          path: ${{ runner.temp }}/qft0l-bootstrap/out/mathlib-cache.part.11
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Upload Mathlib cache part 12
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-cache-12-${{ github.run_id }}
+          path: ${{ runner.temp }}/qft0l-bootstrap/out/mathlib-cache.part.12
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Upload Mathlib cache part 13
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-cache-13-${{ github.run_id }}
+          path: ${{ runner.temp }}/qft0l-bootstrap/out/mathlib-cache.part.13
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Upload Mathlib cache part 14
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-cache-14-${{ github.run_id }}
+          path: ${{ runner.temp }}/qft0l-bootstrap/out/mathlib-cache.part.14
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Upload Mathlib cache part 15
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-cache-15-${{ github.run_id }}
+          path: ${{ runner.temp }}/qft0l-bootstrap/out/mathlib-cache.part.15
+          if-no-files-found: ignore
+          retention-days: 3
