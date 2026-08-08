@@ -1,0 +1,187 @@
+name: QFT0-L public Mathlib cache transport
+
+on:
+  push:
+    branches:
+      - tmp/qft0l-public-toolchain-bootstrap-20260808
+    paths:
+      - .github/workflows/qft0l-public-cache-transport.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/qft0l-public-cache-transport.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  transport:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      LEAN_URL: https://github.com/leanprover/lean4/releases/download/v4.22.0-rc2/lean-4.22.0-rc2-linux.tar.zst
+      LEAN_SHA256: 73223e5077a2c691389c79900306c520d3f98d03bfffcf4590a7100e59e42c3a
+      MATHLIB_REV: e7c314d39b3d4c512bc4eb66eab008e6c51ceaa6
+    steps:
+      - name: Install exact Lean release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/qft0l-cache-bootstrap
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 5 --retry-all-errors \
+            "$LEAN_URL" -o /tmp/qft0l-cache-bootstrap/lean.tar.zst
+          printf '%s  %s\n' "$LEAN_SHA256" /tmp/qft0l-cache-bootstrap/lean.tar.zst \
+            | sha256sum --check --strict
+          tar --zstd -xf /tmp/qft0l-cache-bootstrap/lean.tar.zst \
+            -C /tmp/qft0l-cache-bootstrap
+          lean_root="$(find /tmp/qft0l-cache-bootstrap -maxdepth 1 -type d \
+            -name 'lean-4.22.0-rc2-linux*' -print -quit)"
+          test -n "$lean_root"
+          echo "LEAN_ROOT=$lean_root" >> "$GITHUB_ENV"
+          echo "$lean_root/bin" >> "$GITHUB_PATH"
+          "$lean_root/bin/lean" --version
+          "$lean_root/bin/lake" --version
+
+      - name: Populate exact Mathlib cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$LEAN_ROOT/bin:$PATH"
+          root=/tmp/qft0l-cache-bootstrap/workspace/qm-foundations/lean
+          h7="$root/stage3-h7-phase-symmetry-bridge-2026-08"
+          qft="$root/stage3-qft0-causal-screw-field-2026-08"
+          mkdir -p "$h7" "$qft"
+
+          cat > "$h7/lean-toolchain" <<'EOF'
+          leanprover/lean4:v4.22.0-rc2
+          EOF
+          sed -i 's/^          //' "$h7/lean-toolchain"
+          cat > "$h7/lakefile.lean" <<EOF
+          import Lake
+          open Lake DSL
+          package stage3_h7_phase_symmetry_bridge where
+          require mathlib from git
+            "https://github.com/leanprover-community/mathlib4" @
+            "$MATHLIB_REV"
+          lean_lib Stage3H7PhaseBridge
+          EOF
+          sed -i 's/^          //' "$h7/lakefile.lean"
+          cat > "$h7/Stage3H7PhaseBridge.lean" <<'EOF'
+          import Mathlib
+          EOF
+          sed -i 's/^          //' "$h7/Stage3H7PhaseBridge.lean"
+
+          cat > "$qft/lean-toolchain" <<'EOF'
+          leanprover/lean4:v4.22.0-rc2
+          EOF
+          sed -i 's/^          //' "$qft/lean-toolchain"
+          cat > "$qft/lakefile.lean" <<'EOF'
+          import Lake
+          open Lake DSL
+          package stage3_qft0_causal_screw_field where
+          require stage3_h7_phase_symmetry_bridge from "../stage3-h7-phase-symmetry-bridge-2026-08"
+          lean_lib Stage3QFT0
+          EOF
+          sed -i 's/^          //' "$qft/lakefile.lean"
+          cat > "$qft/Stage3QFT0.lean" <<'EOF'
+          import Stage3H7PhaseBridge
+          EOF
+          sed -i 's/^          //' "$qft/Stage3QFT0.lean"
+
+          cd "$qft"
+          lake update
+          lake exe cache get
+          test -x "$HOME/.cache/mathlib/leantar-0.1.15"
+          find "$HOME/.cache/mathlib" -type f | sort > /tmp/qft0l-cache-files.txt
+          wc -l /tmp/qft0l-cache-files.txt
+          du -sh "$HOME/.cache/mathlib"
+
+      - name: Package exact cache corpus
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact
+          tar --zstd -cf /tmp/qft0l-mathlib-cache.tar.zst \
+            -C "$HOME/.cache" mathlib
+          sha256sum /tmp/qft0l-mathlib-cache.tar.zst \
+            | tee artifact/mathlib-cache.sha256
+          cp /tmp/qft0l-cache-files.txt artifact/cache-files.txt
+          split -b 350M -d -a 2 /tmp/qft0l-mathlib-cache.tar.zst \
+            artifact/qft0l-mathlib-cache.part-
+          du -sh /tmp/qft0l-mathlib-cache.tar.zst artifact/*
+
+      - name: Upload cache metadata
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-mathlib-cache-metadata
+          path: |
+            artifact/mathlib-cache.sha256
+            artifact/cache-files.txt
+          retention-days: 7
+
+      - name: Upload cache chunk 00
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-mathlib-cache-part-00
+          path: artifact/qft0l-mathlib-cache.part-00
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload cache chunk 01
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-mathlib-cache-part-01
+          path: artifact/qft0l-mathlib-cache.part-01
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload cache chunk 02
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-mathlib-cache-part-02
+          path: artifact/qft0l-mathlib-cache.part-02
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload cache chunk 03
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-mathlib-cache-part-03
+          path: artifact/qft0l-mathlib-cache.part-03
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload cache chunk 04
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-mathlib-cache-part-04
+          path: artifact/qft0l-mathlib-cache.part-04
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload cache chunk 05
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-mathlib-cache-part-05
+          path: artifact/qft0l-mathlib-cache.part-05
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload cache chunk 06
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-mathlib-cache-part-06
+          path: artifact/qft0l-mathlib-cache.part-06
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload cache chunk 07
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-mathlib-cache-part-07
+          path: artifact/qft0l-mathlib-cache.part-07
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 7
