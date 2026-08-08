@@ -29,8 +29,11 @@ jobs:
           mkdir -p artifact work
           curl --proto '=https' --tlsv1.2 --fail --location --retry 5 --retry-all-errors "$url" \
             -o artifact/leantar-v0.1.15-x86_64-unknown-linux-musl.tar.gz
+          tar -tzf artifact/leantar-v0.1.15-x86_64-unknown-linux-musl.tar.gz
           tar -xzf artifact/leantar-v0.1.15-x86_64-unknown-linux-musl.tar.gz -C work
-          install -m 0755 work/leantar artifact/leantar-0.1.15
+          bin="$(find work -type f -name leantar -print -quit)"
+          test -n "$bin"
+          install -m 0755 "$bin" artifact/leantar-0.1.15
           artifact/leantar-0.1.15 --version | tee artifact/leantar-version.txt
           sha256sum artifact/leantar-v0.1.15-x86_64-unknown-linux-musl.tar.gz \
             artifact/leantar-0.1.15 | tee artifact/SHA256SUMS
