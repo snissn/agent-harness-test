@@ -1,0 +1,21 @@
+{
+  "schema": "qft0l-public-bootstrap-v1",
+  "run_id": 31240345832,
+  "run_attempt": 1,
+  "helper_head": "2d8eac823fb4a83a95780a869b45e7cd1caae619",
+  "lean_version": "v4.22.0-rc2",
+  "lean_sha256": "73223e5077a2c691389c79900306c520d3f98d03bfffcf4590a7100e59e42c3a",
+  "mathlib_rev": "e7c314d39b3d4c512bc4eb66eab008e6c51ceaa6",
+  "toolchain_parts": [
+    "lean-toolchain.part.00",
+    "lean-toolchain.part.01"
+  ],
+  "package_source_parts": [
+    "package-sources.part.00",
+    "package-sources.part.01",
+    "package-sources.part.02"
+  ],
+  "cache_parts": [
+    "mathlib-cache.part.00"
+  ]
+}

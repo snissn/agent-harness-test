@@ -1,0 +1,9 @@
+Cli	https://github.com/leanprover/lean4-cli	a8733224c9aad9d372d82f208e32da1eed667875
+LeanSearchClient	https://github.com/leanprover-community/LeanSearchClient	6c62474116f525d2814f0157bb468bf3a4f9f120
+Qq	https://github.com/leanprover-community/quote4	0632bccc9007cb1c2baf275298f40b15a81fdc90
+aesop	https://github.com/leanprover-community/aesop	8f2d76dce940f1364878dd9b7fde299b607a71ba
+batteries	https://github.com/leanprover-community/batteries	14ac7be905d97a24c53a3247ebf5c5d9c00adc26
+importGraph	https://github.com/leanprover-community/import-graph	2bf782bac3fc773faf4aaab8c735a5a01c189a2d
+mathlib	https://github.com/leanprover-community/mathlib4	e7c314d39b3d4c512bc4eb66eab008e6c51ceaa6
+plausible	https://github.com/leanprover-community/plausible	151892dbc73e6c6033ca33f5a63ae20e57ad75ea
+proofwidgets	https://github.com/leanprover-community/ProofWidgets4	e33ec3e6393358e5764f6acd95a6227e2b9f10bd
