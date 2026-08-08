@@ -1,0 +1,192 @@
+name: QFT0-L public toolchain bootstrap
+
+on:
+  push:
+    branches:
+      - tmp/qft0l-public-toolchain-bootstrap-20260808
+    paths:
+      - .github/workflows/qft0l-public-toolchain-bootstrap.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      LEAN_URL: https://github.com/leanprover/lean4/releases/download/v4.22.0-rc2/lean-4.22.0-rc2-linux.tar.zst
+      LEAN_SHA256: 73223e5077a2c691389c79900306c520d3f98d03bfffcf4590a7100e59e42c3a
+      MATHLIB_REV: e7c314d39b3d4c512bc4eb66eab008e6c51ceaa6
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Download and verify exact Lean release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bootstrap-artifacts /tmp/qft0l-bootstrap
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 5 --retry-all-errors \
+            "$LEAN_URL" -o bootstrap-artifacts/lean-4.22.0-rc2-linux.tar.zst
+          printf '%s  %s\n' "$LEAN_SHA256" \
+            bootstrap-artifacts/lean-4.22.0-rc2-linux.tar.zst | sha256sum --check --strict
+          tar --zstd -xf bootstrap-artifacts/lean-4.22.0-rc2-linux.tar.zst -C /tmp/qft0l-bootstrap
+          lean_root="$(find /tmp/qft0l-bootstrap -maxdepth 1 -type d -name 'lean-4.22.0-rc2-linux*' -print -quit)"
+          test -n "$lean_root"
+          echo "LEAN_ROOT=$lean_root" >> "$GITHUB_ENV"
+          echo "$lean_root/bin" >> "$GITHUB_PATH"
+          "$lean_root/bin/lean" --version
+          "$lean_root/bin/lake" --version
+
+      - name: Resolve the exact QFT0-L dependency graph and cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$LEAN_ROOT/bin:$PATH"
+          root=/tmp/qft0l-bootstrap/workspace/qm-foundations/lean
+          h7="$root/stage3-h7-phase-symmetry-bridge-2026-08"
+          qft="$root/stage3-qft0-causal-screw-field-2026-08"
+          mkdir -p "$h7" "$qft"
+
+          cat > "$h7/lean-toolchain" <<'EOF'
+          leanprover/lean4:v4.22.0-rc2
+          EOF
+          sed -i 's/^          //' "$h7/lean-toolchain"
+          cat > "$h7/lakefile.lean" <<EOF
+          import Lake
+          open Lake DSL
+
+          package stage3_h7_phase_symmetry_bridge where
+            version := v!"0.1.0"
+
+          require mathlib from git
+            "https://github.com/leanprover-community/mathlib4" @
+            "$MATHLIB_REV"
+
+          lean_lib Stage3H7PhaseBridge
+          EOF
+          sed -i 's/^          //' "$h7/lakefile.lean"
+          cat > "$h7/Stage3H7PhaseBridge.lean" <<'EOF'
+          import Mathlib
+          EOF
+          sed -i 's/^          //' "$h7/Stage3H7PhaseBridge.lean"
+
+          cat > "$qft/lean-toolchain" <<'EOF'
+          leanprover/lean4:v4.22.0-rc2
+          EOF
+          sed -i 's/^          //' "$qft/lean-toolchain"
+          cat > "$qft/lakefile.lean" <<'EOF'
+          import Lake
+          open Lake DSL
+
+          package stage3_qft0_causal_screw_field where
+            version := v!"0.1.0"
+
+          require stage3_h7_phase_symmetry_bridge from "../stage3-h7-phase-symmetry-bridge-2026-08"
+
+          lean_lib Stage3QFT0
+          EOF
+          sed -i 's/^          //' "$qft/lakefile.lean"
+          cat > "$qft/Stage3QFT0.lean" <<'EOF'
+          import Stage3H7PhaseBridge
+          EOF
+          sed -i 's/^          //' "$qft/Stage3QFT0.lean"
+
+          cd "$qft"
+          lean --version
+          lake --version
+          lake update
+          lake exe cache get
+          lake build Stage3QFT0
+          cat lake-manifest.json
+
+          tar --zstd -cf /tmp/qft0l-deps.tar.zst .lake lake-manifest.json
+          sha256sum /tmp/qft0l-deps.tar.zst | tee bootstrap-deps.sha256
+          split -b 350M -d -a 2 /tmp/qft0l-deps.tar.zst \
+            "$GITHUB_WORKSPACE/bootstrap-artifacts/qft0l-deps.part-"
+          cp lake-manifest.json "$GITHUB_WORKSPACE/bootstrap-artifacts/"
+          cp bootstrap-deps.sha256 "$GITHUB_WORKSPACE/bootstrap-artifacts/"
+          du -sh .lake /tmp/qft0l-deps.tar.zst "$GITHUB_WORKSPACE/bootstrap-artifacts"/*
+
+      - name: Upload exact Lean release
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-lean-4.22.0-rc2-linux
+          path: bootstrap-artifacts/lean-4.22.0-rc2-linux.tar.zst
+          compression-level: 0
+          retention-days: 7
+
+      - name: Upload dependency metadata
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-dependency-metadata
+          path: |
+            bootstrap-artifacts/lake-manifest.json
+            bootstrap-artifacts/bootstrap-deps.sha256
+          retention-days: 7
+
+      - name: Upload dependency chunk 00
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-deps-part-00
+          path: bootstrap-artifacts/qft0l-deps.part-00
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload dependency chunk 01
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-deps-part-01
+          path: bootstrap-artifacts/qft0l-deps.part-01
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload dependency chunk 02
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-deps-part-02
+          path: bootstrap-artifacts/qft0l-deps.part-02
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload dependency chunk 03
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-deps-part-03
+          path: bootstrap-artifacts/qft0l-deps.part-03
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload dependency chunk 04
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-deps-part-04
+          path: bootstrap-artifacts/qft0l-deps.part-04
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload dependency chunk 05
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-deps-part-05
+          path: bootstrap-artifacts/qft0l-deps.part-05
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload dependency chunk 06
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-deps-part-06
+          path: bootstrap-artifacts/qft0l-deps.part-06
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload dependency chunk 07
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-deps-part-07
+          path: bootstrap-artifacts/qft0l-deps.part-07
+          compression-level: 0
+          if-no-files-found: ignore
+          retention-days: 7
