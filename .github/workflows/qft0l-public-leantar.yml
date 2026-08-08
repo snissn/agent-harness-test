@@ -1,0 +1,44 @@
+name: QFT0-L public leantar transport
+
+on:
+  push:
+    branches:
+      - tmp/qft0l-public-toolchain-bootstrap-20260808
+    paths:
+      - .github/workflows/qft0l-public-leantar.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/qft0l-public-leantar.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  transport:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download exact public helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          url=https://github.com/digama0/leangz/releases/download/v0.1.15/leantar-v0.1.15-x86_64-unknown-linux-musl.tar.gz
+          mkdir -p artifact work
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 5 --retry-all-errors "$url" \
+            -o artifact/leantar-v0.1.15-x86_64-unknown-linux-musl.tar.gz
+          tar -xzf artifact/leantar-v0.1.15-x86_64-unknown-linux-musl.tar.gz -C work
+          install -m 0755 work/leantar artifact/leantar-0.1.15
+          artifact/leantar-0.1.15 --version | tee artifact/leantar-version.txt
+          sha256sum artifact/leantar-v0.1.15-x86_64-unknown-linux-musl.tar.gz \
+            artifact/leantar-0.1.15 | tee artifact/SHA256SUMS
+
+      - name: Upload exact helper
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: qft0l-leantar-0.1.15-linux
+          path: artifact/
+          compression-level: 0
+          retention-days: 7
